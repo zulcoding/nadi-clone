@@ -157,7 +157,10 @@ export function createTreeMesh(
   return tree;
 }
 
-export function createAmbulanceMesh(mats: HospitalMaterialSet): THREE.Group {
+export function createAmbulanceMesh(mats: HospitalMaterialSet): {
+  amb: THREE.Group;
+  sirenBarMat: THREE.MeshStandardMaterial;
+} {
   const amb = new THREE.Group();
 
   // Contact shadow
@@ -203,10 +206,16 @@ export function createAmbulanceMesh(mats: HospitalMaterialSet): THREE.Group {
   windshield.position.set(1.24, 0.76, 0);
   amb.add(windshield);
 
-  // Emergency siren light bar on roof
+  // Emergency siren light bar on roof with emissive capability for Night Mode
+  const sirenBarMat = new THREE.MeshStandardMaterial({
+    color: 0xe8612c,
+    emissive: 0xe8612c,
+    emissiveIntensity: 0.25,
+    roughness: 0.3,
+  });
   const lightBar = new THREE.Mesh(
     new THREE.BoxGeometry(0.28, 0.14, 0.64),
-    mats.terracotta
+    sirenBarMat
   );
   lightBar.position.set(0.35, 1.36, 0);
   amb.add(lightBar);
@@ -226,7 +235,7 @@ export function createAmbulanceMesh(mats: HospitalMaterialSet): THREE.Group {
     amb.add(wheel);
   }
 
-  return amb;
+  return { amb, sirenBarMat };
 }
 
 function createRoundedBoxShape(w: number, d: number, r: number): THREE.Shape {
@@ -251,6 +260,7 @@ export function createExteriorHospitalGroup(
 ): {
   exteriorGroup: THREE.Group;
   ambulance: THREE.Group;
+  sirenBarMat: THREE.MeshStandardMaterial;
   roadCurve: THREE.CatmullRomCurve3;
 } {
   const exteriorGroup = new THREE.Group();
@@ -438,7 +448,7 @@ export function createExteriorHospitalGroup(
   }
 
   // Ambulance on road
-  const ambulance = createAmbulanceMesh(mats);
+  const { amb: ambulance, sirenBarMat } = createAmbulanceMesh(mats);
   const ambPt = roadCurve.getPointAt(0.56);
   const ambTan = roadCurve.getTangentAt(0.56);
   ambulance.position.set(ambPt.x, 0.08, ambPt.z);
@@ -470,7 +480,25 @@ export function createExteriorHospitalGroup(
   ped2.group.rotation.y = -0.8;
   exteriorGroup.add(ped2.group);
 
-  return { exteriorGroup, ambulance, roadCurve };
+  return { exteriorGroup, ambulance, sirenBarMat, roadCurve };
+}
+
+function createHotspotPin(
+  x: number,
+  y: number,
+  z: number,
+  hotspotId: string
+): THREE.Mesh {
+  const pinMat = new THREE.MeshBasicMaterial({
+    color: 0xe8612c,
+    transparent: true,
+    opacity: 0.9,
+  });
+  const pin = new THREE.Mesh(new THREE.OctahedronGeometry(0.24, 0), pinMat);
+  pin.position.set(x, y, z);
+  pin.userData.hotspotId = hotspotId;
+  pin.userData.baseY = y;
+  return pin;
 }
 
 export function createInteriorHospitalGroup(
@@ -481,8 +509,22 @@ export function createInteriorHospitalGroup(
   patientPathCurve: THREE.CatmullRomCurve3;
   heroPatient: CharacterRig;
   followRing: THREE.Mesh;
+  queueTvMesh: THREE.Mesh;
+  xrayScanBeam: THREE.Mesh;
+  interactables: THREE.Object3D[];
+  hotspotPins: THREE.Mesh[];
+  staffRigs: {
+    nurse: CharacterRig;
+    doctor: CharacterRig;
+    pharmacist: CharacterRig;
+    labTech: CharacterRig;
+  };
+  floor2Group: THREE.Group;
+  floor3Group: THREE.Group;
 } {
   const interiorGroup = new THREE.Group();
+  const interactables: THREE.Object3D[] = [];
+  const hotspotPins: THREE.Mesh[] = [];
 
   // Large Cutaway Floor Plan Slab with warm peach perimeter wall
   const floorShape = createRoundedBoxShape(28, 17, 2.4);
@@ -618,7 +660,9 @@ export function createInteriorHospitalGroup(
   receptionDesk.position.set(-5.2, 0.52, -4.4);
   receptionDesk.castShadow = true;
   receptionDesk.receiveShadow = true;
+  receptionDesk.userData.hotspotId = 'pendaftaran-tv';
   interiorGroup.add(receptionDesk);
+  interactables.push(receptionDesk);
 
   const receptionFrontPanel = new THREE.Mesh(
     new THREE.BoxGeometry(3.6, 0.65, 0.08),
@@ -645,15 +689,22 @@ export function createInteriorHospitalGroup(
   });
 
   // Wall Queue TV Screen ("NOMOR ANTREAN A-012 | LOKET 2")
-  const queueTv = new THREE.Mesh(
+  const queueTvMesh = new THREE.Mesh(
     new THREE.BoxGeometry(2.1, 1.05, 0.14),
     new THREE.MeshBasicMaterial({
       map: createQueueScreenTexture('A-012', '2', maxAnisotropy),
     })
   );
-  queueTv.position.set(-1.1, 2.25, -4.2);
-  queueTv.rotation.y = -Math.PI / 2;
-  interiorGroup.add(queueTv);
+  queueTvMesh.position.set(-1.1, 2.25, -4.2);
+  queueTvMesh.rotation.y = -Math.PI / 2;
+  queueTvMesh.userData.hotspotId = 'pendaftaran-tv';
+  interiorGroup.add(queueTvMesh);
+  interactables.push(queueTvMesh);
+
+  const pinPendaftaran = createHotspotPin(-1.1, 3.1, -4.2, 'pendaftaran-tv');
+  interiorGroup.add(pinPendaftaran);
+  interactables.push(pinPendaftaran);
+  hotspotPins.push(pinPendaftaran);
 
   // Waiting Chairs in Pendaftaran
   [-6.2, -5.0, -3.8].forEach((cx, idx) => {
@@ -718,13 +769,20 @@ export function createInteriorHospitalGroup(
   interiorGroup.add(scalePillar);
 
   const vitalsScreen = new THREE.Mesh(
-    new THREE.BoxGeometry(0.82, 0.44, 0.08),
+    new THREE.BoxGeometry(0.95, 0.52, 0.12),
     new THREE.MeshBasicMaterial({
       map: createVitalsTagTexture(maxAnisotropy),
     })
   );
   vitalsScreen.position.set(0.2, 1.82, -2.05);
+  vitalsScreen.userData.hotspotId = 'poliklinik-vitals';
   interiorGroup.add(vitalsScreen);
+  interactables.push(vitalsScreen);
+
+  const pinPoliklinik = createHotspotPin(0.2, 2.45, -2.05, 'poliklinik-vitals');
+  interiorGroup.add(pinPoliklinik);
+  interactables.push(pinPoliklinik);
+  hotspotPins.push(pinPoliklinik);
 
   // Nurse in teal scrubs
   const nurse = createCharacterMesh(mats, { shirtColor: 0x0d9488 });
@@ -739,7 +797,9 @@ export function createInteriorHospitalGroup(
   );
   docDesk.position.set(3.2, 0.41, -4.8);
   docDesk.castShadow = true;
+  docDesk.userData.hotspotId = 'poliklinik-vitals';
   interiorGroup.add(docDesk);
+  interactables.push(docDesk);
 
   const doctorChar = createCharacterMesh(mats, {
     shirtColor: 0xfaf8f5,
@@ -806,7 +866,9 @@ export function createInteriorHospitalGroup(
   );
   labBench.position.set(7.5, 0.45, -5.2);
   labBench.castShadow = true;
+  labBench.userData.hotspotId = 'radiologi-xray';
   interiorGroup.add(labBench);
+  interactables.push(labBench);
 
   const labTech = createCharacterMesh(mats, { shirtColor: 0xfaf8f5 });
   labTech.group.position.set(7.5, 0, -6.1);
@@ -814,11 +876,28 @@ export function createInteriorHospitalGroup(
 
   // Radiology Chest X-Ray Stand
   const xrayBoard = new THREE.Mesh(
-    new THREE.BoxGeometry(1.1, 1.4, 0.16),
+    new THREE.BoxGeometry(1.15, 1.45, 0.16),
     mats.darkCharcoal
   );
   xrayBoard.position.set(10.2, 1.35, -5.8);
+  xrayBoard.userData.hotspotId = 'radiologi-xray';
   interiorGroup.add(xrayBoard);
+  interactables.push(xrayBoard);
+
+  // Animated Glowing X-Ray Scan Laser Bar
+  const xrayScanBeam = new THREE.Mesh(
+    new THREE.BoxGeometry(1.18, 0.07, 0.2),
+    new THREE.MeshBasicMaterial({
+      color: 0x10b981,
+    })
+  );
+  xrayScanBeam.position.set(10.2, 1.35, -5.75);
+  interiorGroup.add(xrayScanBeam);
+
+  const pinRadiologi = createHotspotPin(10.2, 2.55, -5.8, 'radiologi-xray');
+  interiorGroup.add(pinRadiologi);
+  interactables.push(pinRadiologi);
+  hotspotPins.push(pinRadiologi);
 
   const xrayPillar = new THREE.Mesh(
     new THREE.BoxGeometry(0.22, 2.4, 0.22),
@@ -842,7 +921,14 @@ export function createInteriorHospitalGroup(
   );
   shelfCabinet.position.set(12.2, 1.4, 0.2);
   shelfCabinet.castShadow = true;
+  shelfCabinet.userData.hotspotId = 'farmasi-shelf';
   interiorGroup.add(shelfCabinet);
+  interactables.push(shelfCabinet);
+
+  const pinFarmasi = createHotspotPin(12.2, 3.15, 0.2, 'farmasi-shelf');
+  interiorGroup.add(pinFarmasi);
+  interactables.push(pinFarmasi);
+  hotspotPins.push(pinFarmasi);
 
   const medColors = [0xe8612c, 0x10b981, 0x3b82f6, 0xf59e0b, 0xec4899, 0x8b5cf6];
   for (let row = 0; row < 4; row++) {
@@ -867,7 +953,9 @@ export function createInteriorHospitalGroup(
   );
   farmasiCounter.position.set(12.0, 0.5, 2.6);
   farmasiCounter.castShadow = true;
+  farmasiCounter.userData.hotspotId = 'farmasi-shelf';
   interiorGroup.add(farmasiCounter);
+  interactables.push(farmasiCounter);
 
   const farmasiTop = new THREE.Mesh(
     new THREE.BoxGeometry(3.5, 0.12, 1.15),
@@ -902,7 +990,14 @@ export function createInteriorHospitalGroup(
   );
   kasirCounter.position.set(15.6, 0.5, 3.2);
   kasirCounter.castShadow = true;
+  kasirCounter.userData.hotspotId = 'kasir-pos';
   interiorGroup.add(kasirCounter);
+  interactables.push(kasirCounter);
+
+  const pinKasir = createHotspotPin(15.6, 2.15, 3.2, 'kasir-pos');
+  interiorGroup.add(pinKasir);
+  interactables.push(pinKasir);
+  hotspotPins.push(pinKasir);
 
   const kasirTop = new THREE.Mesh(
     new THREE.BoxGeometry(2.9, 0.12, 1.15),
@@ -935,6 +1030,100 @@ export function createInteriorHospitalGroup(
   indoorPlant.position.set(9.4, 0, 5.8);
   interiorGroup.add(indoorPlant);
 
+  // =========================================================
+  // MULTI-FLOOR SPECIALIST STATIONS (LANTAI 2 & LANTAI 3)
+  // =========================================================
+  const floor2Group = new THREE.Group();
+  floor2Group.visible = false;
+
+  // Lantai 2 Sign: PUSAT JANTUNG & USG 4D
+  const signJantung = new THREE.Mesh(
+    new THREE.BoxGeometry(4.2, 0.82, 0.18),
+    new THREE.MeshStandardMaterial({
+      map: createRoomSignTexture(
+        'L2 · JANTUNG & IBU-ANAK',
+        '#18181B',
+        '#FFFFFF',
+        true,
+        maxAnisotropy
+      ),
+      roughness: 0.35,
+    })
+  );
+  signJantung.position.set(2.4, 3.92, -7.35);
+  floor2Group.add(signJantung);
+
+  // Cardiac Treadmill EKG Station in Zone 2
+  const treadmillDeck = new THREE.Mesh(
+    new THREE.BoxGeometry(1.2, 0.16, 2.1),
+    mats.darkCharcoal
+  );
+  treadmillDeck.position.set(1.8, 0.1, 0.8);
+  floor2Group.add(treadmillDeck);
+
+  const treadmillConsole = new THREE.Mesh(
+    new THREE.BoxGeometry(1.1, 1.15, 0.25),
+    mats.metalChrome
+  );
+  treadmillConsole.position.set(1.8, 0.65, -0.15);
+  floor2Group.add(treadmillConsole);
+
+  // 4D Ultrasound (USG) Pod in Zone 3
+  const usgPod = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.55, 0.65, 1.35, 16),
+    mats.whiteCoat
+  );
+  usgPod.position.set(6.8, 0.68, 0.9);
+  floor2Group.add(usgPod);
+
+  const usgScreen = new THREE.Mesh(
+    new THREE.BoxGeometry(0.85, 0.58, 0.1),
+    new THREE.MeshBasicMaterial({ color: 0x10b981 })
+  );
+  usgScreen.position.set(6.8, 1.62, 0.9);
+  floor2Group.add(usgScreen);
+
+  interiorGroup.add(floor2Group);
+
+  // Lantai 3 Group: ORTOPEDI, SARAF & REHAB MEDIS
+  const floor3Group = new THREE.Group();
+  floor3Group.visible = false;
+
+  const signOrtopedi = new THREE.Mesh(
+    new THREE.BoxGeometry(4.4, 0.82, 0.18),
+    new THREE.MeshStandardMaterial({
+      map: createRoomSignTexture(
+        'L3 · ORTOPEDI & REHAB',
+        '#0F766E',
+        '#FFFFFF',
+        true,
+        maxAnisotropy
+      ),
+      roughness: 0.35,
+    })
+  );
+  signOrtopedi.position.set(2.4, 3.92, -7.35);
+  floor3Group.add(signOrtopedi);
+
+  // Parallel Bar Gait Rehabilitation Track
+  const rehabMat = new THREE.Mesh(
+    new THREE.BoxGeometry(4.2, 0.08, 1.3),
+    new THREE.MeshStandardMaterial({ color: 0x0d9488, roughness: 0.6 })
+  );
+  rehabMat.position.set(3.2, 0.05, 1.1);
+  floor3Group.add(rehabMat);
+
+  [-0.55, 0.55].forEach((rz) => {
+    const rail = new THREE.Mesh(
+      new THREE.BoxGeometry(4.0, 0.08, 0.08),
+      mats.metalChrome
+    );
+    rail.position.set(3.2, 0.88, 1.1 + rz);
+    floor3Group.add(rail);
+  });
+
+  interiorGroup.add(floor3Group);
+
   // Hero Patient Character (walks along the orange path!)
   const heroPatient = createCharacterMesh(mats, {
     shirtColor: 0xe8612c,
@@ -964,5 +1153,17 @@ export function createInteriorHospitalGroup(
     patientPathCurve,
     heroPatient,
     followRing,
+    queueTvMesh,
+    xrayScanBeam,
+    interactables,
+    hotspotPins,
+    staffRigs: {
+      nurse,
+      doctor: doctorChar,
+      pharmacist,
+      labTech,
+    },
+    floor2Group,
+    floor3Group,
   };
 }

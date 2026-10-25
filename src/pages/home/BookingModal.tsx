@@ -42,6 +42,7 @@ export interface BookingModalProps {
     scheduleText: string;
     patientName: string;
   }) => void;
+  onSimulate3DCheckIn?: (queueCode: string) => void;
 }
 
 const STEP_LABELS = [
@@ -58,6 +59,7 @@ export function BookingModal({
   initialSpecialtyId,
   initialDoctor,
   onBookingConfirmed,
+  onSimulate3DCheckIn,
 }: BookingModalProps) {
   const [step, setStep] = React.useState<number>(1);
   const [selectedSpecialtyId, setSelectedSpecialtyId] = React.useState<string>(
@@ -1199,12 +1201,15 @@ export function BookingModal({
                   </span>
                 </Button>
                 <Button
-                  variant="outline"
-                  onClick={() => window.print()}
+                  variant="orange"
+                  onClick={() => {
+                    onSimulate3DCheckIn?.('A-030');
+                    onOpenChange(false);
+                  }}
                   className="text-xs"
                 >
-                  <Printer className="h-3.5 w-3.5" />
-                  <span>Cetak / simpan PDF</span>
+                  <span>Panggil A-030 di TV 3D</span>
+                  <ArrowRight className="h-3.5 w-3.5" />
                 </Button>
                 <Button
                   onClick={() => onOpenChange(false)}

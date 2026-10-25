@@ -2,9 +2,14 @@ import * as React from 'react';
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { TOUR_STEPS } from './data';
-import { interpolateTourCameraState } from './booking-logic';
+import {
+  getFloorConfig,
+  interpolateTourCameraState,
+  type FloorId,
+} from './booking-logic';
 import {
   createHospitalMaterials,
+  createQueueScreenTexture,
   detectSoftwareGl,
 } from './three-materials';
 import {
@@ -16,6 +21,11 @@ export interface HospitalSceneCanvasProps {
   activeStep: number;
   continuousStepRef: React.MutableRefObject<number>;
   followCamTight?: boolean;
+  activeFloor?: FloorId;
+  isNightMode?: boolean;
+  activeQueueCode?: string;
+  selectedHotspotId?: string | null;
+  onSelectHotspot?: (hotspotId: string | null) => void;
 }
 
 // Pre-allocated math objects outside render loop (zero GC in tick)
@@ -30,6 +40,14 @@ const _patientPoint = new THREE.Vector3();
 const _patientTangent = new THREE.Vector3();
 const _ambPoint = new THREE.Vector3();
 const _ambTangent = new THREE.Vector3();
+const _pointerNdc = new THREE.Vector2();
+const _raycaster = new THREE.Raycaster();
+const _daySkyColor = new THREE.Color(0xf6f2ea);
+const _nightSkyColor = new THREE.Color(0x131926);
+const _dayGroundColor = new THREE.Color(0xf4efe4);
+const _nightGroundColor = new THREE.Color(0x182030);
+const _dayRimColor = new THREE.Color(0xfde6d2);
+const _nightRimColor = new THREE.Color(0x60a5fa);
 
 function dampAngle(
   current: number,
@@ -46,17 +64,60 @@ export function HospitalSceneCanvas({
   activeStep,
   continuousStepRef,
   followCamTight = false,
+  activeFloor = 1,
+  isNightMode = false,
+  activeQueueCode = 'A-012',
+  selectedHotspotId = null,
+  onSelectHotspot,
 }: HospitalSceneCanvasProps) {
   const mountRef = React.useRef<HTMLDivElement | null>(null);
+  const queueTvRef = React.useRef<{
+    mesh: THREE.Mesh;
+    maxAnisotropy: number;
+  } | null>(null);
+
   const stateRef = React.useRef({
     activeStep,
     followCamTight,
+    activeFloor,
+    isNightMode,
+    selectedHotspotId,
+    onSelectHotspot,
   });
 
   React.useEffect(() => {
     stateRef.current.activeStep = activeStep;
     stateRef.current.followCamTight = followCamTight;
-  }, [activeStep, followCamTight]);
+    stateRef.current.activeFloor = activeFloor;
+    stateRef.current.isNightMode = isNightMode;
+    stateRef.current.selectedHotspotId = selectedHotspotId;
+    stateRef.current.onSelectHotspot = onSelectHotspot;
+  }, [
+    activeStep,
+    followCamTight,
+    activeFloor,
+    isNightMode,
+    selectedHotspotId,
+    onSelectHotspot,
+  ]);
+
+  // Dynamically update 3D Pendaftaran Queue TV texture when activeQueueCode changes!
+  React.useEffect(() => {
+    const tvEntry = queueTvRef.current;
+    if (!tvEntry) return;
+    const mat = tvEntry.mesh.material as THREE.MeshBasicMaterial;
+    const oldMap = mat.map;
+    const nextTex = createQueueScreenTexture(
+      activeQueueCode,
+      '2',
+      tvEntry.maxAnisotropy
+    );
+    mat.map = nextTex;
+    mat.needsUpdate = true;
+    if (oldMap) {
+      oldMap.dispose();
+    }
+  }, [activeQueueCode]);
 
   React.useEffect(() => {
     const container = mountRef.current;
@@ -65,8 +126,10 @@ export function HospitalSceneCanvas({
     const isSoftwareGl = detectSoftwareGl();
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xf6f2ea);
-    scene.fog = new THREE.FogExp2(0xf6f2ea, 0.011);
+    const bgColor = new THREE.Color(0xf6f2ea);
+    scene.background = bgColor;
+    const sceneFog = new THREE.FogExp2(0xf6f2ea, 0.011);
+    scene.fog = sceneFog;
 
     const width = container.clientWidth || window.innerWidth;
     const height = container.clientHeight || window.innerHeight;
@@ -130,13 +193,14 @@ export function HospitalSceneCanvas({
     scene.add(rimLight);
 
     // Infinite ground plane matching warm ivory background
+    const groundMat = new THREE.MeshStandardMaterial({
+      color: 0xf4efe4,
+      roughness: 0.92,
+      metalness: 0.0,
+    });
     const groundPlane = new THREE.Mesh(
       new THREE.PlaneGeometry(180, 180),
-      new THREE.MeshStandardMaterial({
-        color: 0xf4efe4,
-        roughness: 0.92,
-        metalness: 0.0,
-      })
+      groundMat
     );
     groundPlane.rotation.x = -Math.PI / 2;
     groundPlane.position.y = -0.32;
@@ -147,42 +211,109 @@ export function HospitalSceneCanvas({
     const mats = createHospitalMaterials(isSoftwareGl);
 
     // Build Exterior & Interior Cutaway Groups
-    const { exteriorGroup, ambulance, roadCurve } = createExteriorHospitalGroup(
-      mats,
-      maxAnisotropy
-    );
+    const { exteriorGroup, ambulance, sirenBarMat, roadCurve } =
+      createExteriorHospitalGroup(mats, maxAnisotropy);
     exteriorGroup.position.set(2.0, 0, 0);
     scene.add(exteriorGroup);
 
-    const { interiorGroup, patientPathCurve, heroPatient, followRing } =
-      createInteriorHospitalGroup(mats, maxAnisotropy);
+    const {
+      interiorGroup,
+      patientPathCurve,
+      heroPatient,
+      followRing,
+      queueTvMesh,
+      xrayScanBeam,
+      interactables,
+      hotspotPins,
+      staffRigs,
+      floor2Group,
+      floor3Group,
+    } = createInteriorHospitalGroup(mats, maxAnisotropy);
     interiorGroup.position.set(0, -18, 0);
     interiorGroup.visible = false;
     scene.add(interiorGroup);
+
+    queueTvRef.current = { mesh: queueTvMesh, maxAnisotropy };
 
     if (!isSoftwareGl) {
       renderer.compile(scene, camera);
     }
 
-    // Subtle pointer parallax state
+    // Subtle pointer parallax + throttled 3D raycasting
     let pointerNormX = 0;
     let pointerNormY = 0;
     let smoothPointerX = 0;
     let smoothPointerY = 0;
+    let lastRaycastTime = 0;
+    let hoveredHotspotId: string | null = null;
+    let smoothInterior = 0;
 
     const handlePointerMove = (e: PointerEvent) => {
       pointerNormX = (e.clientX / Math.max(1, window.innerWidth) - 0.5) * 2;
       pointerNormY = (e.clientY / Math.max(1, window.innerHeight) - 0.5) * 2;
+
+      const now = performance.now();
+      if (now - lastRaycastTime < 65 || smoothInterior < 0.35) return;
+      lastRaycastTime = now;
+
+      const rect = renderer.domElement.getBoundingClientRect();
+      _pointerNdc.x = ((e.clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1;
+      _pointerNdc.y =
+        -((e.clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1;
+
+      _raycaster.setFromCamera(_pointerNdc, camera);
+      const hits = _raycaster.intersectObjects(interactables, false);
+      const nextHover =
+        hits.length > 0
+          ? (hits[0].object.userData.hotspotId as string | undefined) ?? null
+          : null;
+
+      if (nextHover !== hoveredHotspotId) {
+        hoveredHotspotId = nextHover;
+        container.style.cursor = hoveredHotspotId ? 'pointer' : 'default';
+      }
     };
+
+    let downX = 0;
+    let downY = 0;
+    const handlePointerDown = (e: PointerEvent) => {
+      downX = e.clientX;
+      downY = e.clientY;
+    };
+
+    const handlePointerUp = (e: PointerEvent) => {
+      if (Math.hypot(e.clientX - downX, e.clientY - downY) > 6) return;
+      if (smoothInterior < 0.35) return;
+
+      const rect = renderer.domElement.getBoundingClientRect();
+      _pointerNdc.x = ((e.clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1;
+      _pointerNdc.y =
+        -((e.clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1;
+
+      _raycaster.setFromCamera(_pointerNdc, camera);
+      const hits = _raycaster.intersectObjects(interactables, false);
+      if (hits.length > 0) {
+        const hitId = hits[0].object.userData.hotspotId as string | undefined;
+        if (hitId) {
+          stateRef.current.onSelectHotspot?.(hitId);
+        }
+      }
+    };
+
     window.addEventListener('pointermove', handlePointerMove, {
       passive: true,
     });
+    container.addEventListener('pointerdown', handlePointerDown);
+    container.addEventListener('pointerup', handlePointerUp);
 
     let smoothedStep = continuousStepRef.current;
     let currentPatientT = 0.14;
-    let smoothInterior = 0;
     let currentBankZ = 0;
     let currentFov = 34;
+    let smoothNight = stateRef.current.isNightMode ? 1 : 0;
+    let smoothFloorElevation = getFloorConfig(
+      stateRef.current.activeFloor
+    ).cameraElevationOffset;
 
     const clock = new THREE.Clock();
     let frameId = 0;
@@ -218,6 +349,30 @@ export function HospitalSceneCanvas({
         : Math.min(rawDt, 0.06);
       const elapsed = clock.getElapsedTime();
 
+      // 0. Smooth Day / Night Mode Atmosphere & Lighting Interpolation
+      const targetNight = stateRef.current.isNightMode ? 1 : 0;
+      smoothNight = THREE.MathUtils.damp(
+        smoothNight,
+        targetNight,
+        isSoftwareGl ? 8.0 : 4.5,
+        dt
+      );
+      bgColor.lerpColors(_daySkyColor, _nightSkyColor, smoothNight);
+      sceneFog.color.copy(bgColor);
+      groundMat.color.lerpColors(
+        _dayGroundColor,
+        _nightGroundColor,
+        smoothNight
+      );
+      hemiLight.intensity = THREE.MathUtils.lerp(0.95, 0.45, smoothNight);
+      keyLight.intensity = THREE.MathUtils.lerp(1.55, 0.68, smoothNight);
+      rimLight.color.lerpColors(_dayRimColor, _nightRimColor, smoothNight);
+      rimLight.intensity = THREE.MathUtils.lerp(0.65, 1.35, smoothNight);
+
+      // Pulse ambulance siren in Night Mode
+      sirenBarMat.emissiveIntensity =
+        0.25 + smoothNight * (0.9 + Math.sin(elapsed * 12.0) * 0.65);
+
       // 1. Smoothly damp continuous scroll/tour progress
       const targetContinuous = continuousStepRef.current;
       const prevSmoothedStep = smoothedStep;
@@ -239,6 +394,19 @@ export function HospitalSceneCanvas({
         isSoftwareGl ? 10.0 : 6.5,
         dt
       );
+
+      // Smooth Multi-Floor Switcher (Lantai 1 / 2 / 3)
+      const activeFloorNum = stateRef.current.activeFloor;
+      const targetFloorOffset =
+        getFloorConfig(activeFloorNum).cameraElevationOffset;
+      smoothFloorElevation = THREE.MathUtils.damp(
+        smoothFloorElevation,
+        targetFloorOffset,
+        isSoftwareGl ? 8.5 : 5.5,
+        dt
+      );
+      floor2Group.visible = smoothInterior > 0.25 && activeFloorNum === 2;
+      floor3Group.visible = smoothInterior > 0.25 && activeFloorNum === 3;
 
       // Smooth exterior cutaway lift & interior rise
       exteriorGroup.visible = smoothInterior < 0.97;
@@ -306,6 +474,35 @@ export function HospitalSceneCanvas({
       const ringScale = 1 + Math.sin(elapsed * 4.0) * 0.08 + walkStrength * 0.15;
       followRing.scale.set(ringScale, ringScale, 1);
 
+      // 4B. Room Micro-Animations (X-Ray Laser Sweep, Staff Working & Hotspot Beacons)
+      if (interiorGroup.visible) {
+        // Vertical X-ray scan beam sweep in Radiologi
+        xrayScanBeam.position.y = 1.35 + Math.sin(elapsed * 2.8) * 0.52;
+
+        // Subtle nurse & pharmacist examination micro-motions
+        staffRigs.nurse.rightArm.rotation.x =
+          -0.35 + Math.sin(elapsed * 3.0) * 0.18;
+        staffRigs.doctor.rightArm.rotation.x =
+          -0.25 + Math.cos(elapsed * 2.4) * 0.12;
+        staffRigs.pharmacist.leftArm.rotation.x =
+          -0.3 + Math.sin(elapsed * 3.4) * 0.2;
+        staffRigs.labTech.rightArm.rotation.x =
+          -0.28 + Math.cos(elapsed * 3.1) * 0.16;
+
+        // Rotating & bobbing interactive 3D hotspot pins
+        for (let i = 0; i < hotspotPins.length; i++) {
+          const pin = hotspotPins[i];
+          const baseY = (pin.userData.baseY as number) || 2.5;
+          const isSelected =
+            pin.userData.hotspotId === stateRef.current.selectedHotspotId ||
+            pin.userData.hotspotId === hoveredHotspotId;
+          pin.position.y = baseY + Math.sin(elapsed * 3.2 + i) * 0.09;
+          pin.rotation.y = elapsed * 1.8 + i;
+          const s = isSelected ? 1.38 : 1.0;
+          pin.scale.set(s, s, s);
+        }
+      }
+
       // 5. 3D Follow-Camera Computation (blends spline framing with live 3D patient tracking)
       smoothPointerX = THREE.MathUtils.damp(
         smoothPointerX,
@@ -330,7 +527,7 @@ export function HospitalSceneCanvas({
 
       // Offset patient X slightly left (-2.0) so the patient & room stay framed on the right 60% of the screen
       const patientLookX = _patientPoint.x - 2.0;
-      const patientLookY = 1.05;
+      const patientLookY = 1.05 + smoothFloorElevation * 0.45;
       const patientLookZ = _patientPoint.z;
 
       const blendedTargetX = THREE.MathUtils.lerp(
@@ -338,11 +535,13 @@ export function HospitalSceneCanvas({
         patientLookX,
         followWeight
       );
-      const blendedTargetY = THREE.MathUtils.lerp(
-        interp.cameraTarget[1],
-        patientLookY,
-        followWeight
-      );
+      const blendedTargetY =
+        THREE.MathUtils.lerp(
+          interp.cameraTarget[1],
+          patientLookY,
+          followWeight
+        ) +
+        smoothFloorElevation * 0.35;
       const blendedTargetZ = THREE.MathUtils.lerp(
         interp.cameraTarget[2],
         patientLookZ,
@@ -351,8 +550,10 @@ export function HospitalSceneCanvas({
 
       // Follow camera position also tracks the patient's 3D offset smoothly
       const patientChasePosX = _patientPoint.x - 4.2;
-      const patientChasePosY = stateRef.current.followCamTight ? 8.6 : 10.4;
-      const patientChasePosZ = _patientPoint.z + (stateRef.current.followCamTight ? 9.8 : 11.8);
+      const patientChasePosY =
+        (stateRef.current.followCamTight ? 8.6 : 10.4) + smoothFloorElevation;
+      const patientChasePosZ =
+        _patientPoint.z + (stateRef.current.followCamTight ? 9.8 : 11.8);
 
       const blendedCamX =
         THREE.MathUtils.lerp(
@@ -363,7 +564,7 @@ export function HospitalSceneCanvas({
         smoothPointerX * 0.65;
       const blendedCamY =
         THREE.MathUtils.lerp(
-          interp.cameraPos[1],
+          interp.cameraPos[1] + smoothFloorElevation,
           patientChasePosY,
           followWeight * 0.75
         ) -
@@ -428,8 +629,7 @@ export function HospitalSceneCanvas({
       currentBankZ = THREE.MathUtils.damp(currentBankZ, targetBankZ, 5.0, dt);
       camera.rotation.z += currentBankZ;
 
-      const targetFov =
-        34 + Math.min(2.2, Math.abs(stepVelocity) * 0.65);
+      const targetFov = 34 + Math.min(2.2, Math.abs(stepVelocity) * 0.65);
       currentFov = THREE.MathUtils.damp(currentFov, targetFov, 4.5, dt);
       if (Math.abs(camera.fov - currentFov) > 0.02) {
         camera.fov = currentFov;
@@ -462,6 +662,8 @@ export function HospitalSceneCanvas({
       disposed = true;
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('pointermove', handlePointerMove);
+      container.removeEventListener('pointerdown', handlePointerDown);
+      container.removeEventListener('pointerup', handlePointerUp);
       cancelAnimationFrame(frameId);
       clearTimeout(frameId);
       renderer.dispose();

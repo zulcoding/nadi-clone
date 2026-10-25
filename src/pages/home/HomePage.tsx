@@ -1,7 +1,11 @@
 import * as React from 'react';
-import { CalendarCheck } from 'lucide-react';
+import { CalendarCheck, Tv } from 'lucide-react';
 import { TOUR_STEPS, type DoctorItem, type McuPackageItem } from './data';
-import { scrollProgressToTourStep } from './booking-logic';
+import {
+  getHotspotDetails,
+  scrollProgressToTourStep,
+  type FloorId,
+} from './booking-logic';
 import { TopNavbar } from './TopNavbar';
 import { HospitalSceneCanvas } from './HospitalSceneCanvas';
 import { HeroTourOverlay } from './HeroTourOverlay';
@@ -22,6 +26,12 @@ export function HomePage() {
   const [activeStep, setActiveStep] = React.useState<number>(0);
   const [autoTourActive, setAutoTourActive] = React.useState<boolean>(false);
   const [followCamTight, setFollowCamTight] = React.useState<boolean>(false);
+  const [activeFloor, setActiveFloor] = React.useState<FloorId>(1);
+  const [isNightMode, setIsNightMode] = React.useState<boolean>(false);
+  const [activeQueueCode, setActiveQueueCode] = React.useState<string>('A-012');
+  const [selectedHotspotId, setSelectedHotspotId] = React.useState<
+    string | null
+  >(null);
 
   const [bookingOpen, setBookingOpen] = React.useState(false);
   const [bookingSpecialtyId, setBookingSpecialtyId] = React.useState<
@@ -129,6 +139,21 @@ export function HomePage() {
     }
   };
 
+  const handleSelectHotspot = (hotspotId: string | null) => {
+    setSelectedHotspotId(hotspotId);
+    const details = getHotspotDetails(hotspotId);
+    if (details && activeStep !== details.stepIndex) {
+      handleSelectTourStep(details.stepIndex);
+    }
+  };
+
+  const handleSimulate3DCheckIn = (queueCode: string) => {
+    setActiveQueueCode(queueCode);
+    setActiveFloor(1);
+    setSelectedHotspotId('pendaftaran-tv');
+    handleSelectTourStep(1);
+  };
+
   const handleOpenBooking = (specialtyId?: string) => {
     setAutoTourActive(false);
     setBookingDoctor(null);
@@ -174,6 +199,14 @@ export function HomePage() {
               {confirmedTicket.scheduleText}
             </div>
           </div>
+          <button
+            type="button"
+            onClick={() => handleSimulate3DCheckIn(confirmedTicket.queueCode)}
+            className="ml-2 inline-flex items-center gap-1 rounded-xl bg-[#18181B] px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-[#E8612C] transition-colors cursor-pointer"
+          >
+            <Tv className="h-3 w-3" />
+            <span>Lihat di TV 3D</span>
+          </button>
         </div>
       )}
 
@@ -192,6 +225,11 @@ export function HomePage() {
                 activeStep={activeStep}
                 continuousStepRef={continuousStepRef}
                 followCamTight={followCamTight}
+                activeFloor={activeFloor}
+                isNightMode={isNightMode}
+                activeQueueCode={activeQueueCode}
+                selectedHotspotId={selectedHotspotId}
+                onSelectHotspot={handleSelectHotspot}
               />
             </div>
 
@@ -204,6 +242,14 @@ export function HomePage() {
               onToggleAutoTour={() => setAutoTourActive((prev) => !prev)}
               followCamTight={followCamTight}
               onToggleFollowCam={() => setFollowCamTight((prev) => !prev)}
+              activeFloor={activeFloor}
+              onSelectFloor={setActiveFloor}
+              isNightMode={isNightMode}
+              onToggleNightMode={() => setIsNightMode((prev) => !prev)}
+              activeQueueCode={activeQueueCode}
+              onSimulateQueueCall={(code) => setActiveQueueCode(code)}
+              selectedHotspotId={selectedHotspotId}
+              onSelectHotspot={handleSelectHotspot}
             />
           </div>
         </section>
@@ -228,7 +274,11 @@ export function HomePage() {
         onOpenChange={setBookingOpen}
         initialSpecialtyId={bookingSpecialtyId}
         initialDoctor={bookingDoctor}
-        onBookingConfirmed={(ticket) => setConfirmedTicket(ticket)}
+        onBookingConfirmed={(ticket) => {
+          setConfirmedTicket(ticket);
+          setActiveQueueCode(ticket.queueCode);
+        }}
+        onSimulate3DCheckIn={handleSimulate3DCheckIn}
       />
 
       {/* Patient Portal Login Modal */}

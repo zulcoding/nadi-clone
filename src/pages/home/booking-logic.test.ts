@@ -6,6 +6,8 @@ import {
   calculateAppointmentTotal,
   scrollProgressToTourStep,
   interpolateTourCameraState,
+  getFloorConfig,
+  getHotspotDetails,
 } from './booking-logic';
 import { SAMPLE_PATIENT_DATA, TOUR_STEPS } from './data';
 
@@ -75,3 +77,27 @@ test('interpolateTourCameraState smoothly interpolates camera and patient path b
   assert.equal(mid12.interiorFactor, 1);
 });
 
+test('getFloorConfig returns metadata and camera elevation offsets for Lantai 1, 2, and 3', () => {
+  const f1 = getFloorConfig(1);
+  const f2 = getFloorConfig(2);
+  const f3 = getFloorConfig(3);
+
+  assert.equal(f1.shortLabel, 'Lantai 1');
+  assert.equal(f1.cameraElevationOffset, 0);
+  assert.ok(f2.cameraElevationOffset > f1.cameraElevationOffset);
+  assert.ok(f3.cameraElevationOffset > f2.cameraElevationOffset);
+  assert.ok(f2.highlights.length >= 3);
+});
+
+test('getHotspotDetails returns 3D station metadata for valid hotspot IDs and null for unknown', () => {
+  const tv = getHotspotDetails('pendaftaran-tv');
+  assert.ok(tv);
+  assert.equal(tv.stepIndex, 1);
+
+  const xray = getHotspotDetails('radiologi-xray');
+  assert.ok(xray);
+  assert.equal(xray.stepIndex, 3);
+
+  assert.equal(getHotspotDetails('unknown-id'), null);
+  assert.equal(getHotspotDetails(null), null);
+});
