@@ -13,6 +13,9 @@ import {
   getFloatingInfoPointDetails,
   filterFloatingInfoPointsByCategory,
   getFloatingInfoPointForStep,
+  computeDayNightCycleState,
+  getCurrentLocalHour,
+  DAY_NIGHT_PRESETS,
 } from './booking-logic';
 import { SAMPLE_PATIENT_DATA, TOUR_STEPS } from './data';
 import {
@@ -309,6 +312,46 @@ test('3D floating info points provide health tips and hospital directory details
     assert.equal(pt.position3D.length, 3);
   }
 });
+
+test('computeDayNightCycleState adjusts ambient, hemisphere, and directional lights and sun trajectory across 24h cycle', () => {
+  assert.equal(DAY_NIGHT_PRESETS.length, 4);
+
+  const sampleDate = new Date('2026-10-25T08:45:00');
+  assert.equal(getCurrentLocalHour(sampleDate), 8.75);
+
+  const dawn = computeDayNightCycleState(6.5);
+  const midday = computeDayNightCycleState(12.0);
+  const dusk = computeDayNightCycleState(17.5);
+  const night = computeDayNightCycleState(21.5);
+
+  assert.equal(dawn.phaseId, 'dawn');
+  assert.equal( dawn.formattedTime, '06:30');
+  assert.equal(midday.phaseId, 'day');
+  assert.equal(midday.formattedTime, '12:00');
+  assert.equal(dusk.phaseId, 'dusk');
+  assert.equal(dusk.formattedTime, '17:30');
+  assert.equal(night.phaseId, 'night');
+  assert.equal(night.formattedTime, '21:30');
+
+  // Ambient & Directional intensities are highest at midday and lowest at night
+  assert.ok(midday.ambientIntensity > dawn.ambientIntensity);
+  assert.ok(dawn.ambientIntensity > night.ambientIntensity);
+  assert.ok(midday.directionalIntensity > dusk.directionalIntensity);
+  assert.ok(dusk.directionalIntensity > night.directionalIntensity);
+
+  // Sun sweeps from East (+X) at Dawn, to high zenith (+Y) at Midday, to West (-X) at Dusk
+  assert.ok(dawn.sunPosition[0] > 10);
+  assert.ok(Math.abs(midday.sunPosition[0]) < 1);
+  assert.ok(midday.sunPosition[1] >= 27);
+  assert.ok(dusk.sunPosition[0] < -10);
+
+  // Exterior window glow increases from daytime to dusk to night
+  assert.ok(night.windowGlowIntensity > dusk.windowGlowIntensity);
+  assert.ok(dusk.windowGlowIntensity > midday.windowGlowIntensity);
+  assert.equal(midday.isDarkUI, false);
+  assert.equal(night.isDarkUI, true);
+});
+
 
 
 

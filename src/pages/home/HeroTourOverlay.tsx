@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ChevronUp,
   Compass,
+  Clock,
   FileText,
   HeartPulse,
   Info,
@@ -19,6 +20,8 @@ import {
   Sparkles,
   Stethoscope,
   Sun,
+  Sunrise,
+  Sunset,
   Tv,
   Volume2,
   VolumeX,
@@ -27,6 +30,8 @@ import {
 import { Button } from '@/src/components/ui/button';
 import { SPECIALTIES, TOUR_STEPS } from './data';
 import {
+  computeDayNightCycleState,
+  DAY_NIGHT_PRESETS,
   getFloatingInfoPointForStep,
   getFloorConfig,
   getHotspotDetails,
@@ -45,6 +50,10 @@ export interface HeroTourOverlayProps {
   onSelectFloor: (floor: FloorId) => void;
   isNightMode: boolean;
   onToggleNightMode: () => void;
+  timeOfDayHour?: number;
+  onSelectTimeOfDayHour?: (hour: number) => void;
+  dayNightCycleActive?: boolean;
+  onToggleDayNightCycle?: () => void;
   ambientAudioEnabled?: boolean;
   onToggleAmbientAudio?: () => void;
   activeQueueCode: string;
@@ -67,6 +76,10 @@ export function HeroTourOverlay({
   onSelectFloor,
   isNightMode,
   onToggleNightMode,
+  timeOfDayHour,
+  onSelectTimeOfDayHour,
+  dayNightCycleActive = false,
+  onToggleDayNightCycle,
   ambientAudioEnabled = true,
   onToggleAmbientAudio,
   activeQueueCode,
@@ -86,6 +99,9 @@ export function HeroTourOverlay({
   const floorConfig = getFloorConfig(activeFloor);
   const activeHotspot = getHotspotDetails(selectedHotspotId);
   const stepInfoPoint = getFloatingInfoPointForStep(activeStep);
+  const effectiveHour =
+    timeOfDayHour !== undefined ? timeOfDayHour : isNightMode ? 21.5 : 12.0;
+  const cycleState = computeDayNightCycleState(effectiveHour);
 
   return (
     <div className="pointer-events-none relative z-10 flex h-full w-full flex-col justify-between px-4 pt-20 pb-5 sm:px-10 lg:px-16">
@@ -130,6 +146,56 @@ export function HeroTourOverlay({
             );
           })}
         </div>
+
+        {/* Dynamic Day-Night Cycle & Time-of-Day Preset Selector */}
+        {onSelectTimeOfDayHour && (
+          <div
+            data-testid="day-night-preset-bar"
+            className="flex items-center gap-1 rounded-full border border-[#E5DFD3] bg-[#FAF8F4] p-1 shadow-[0_8px_24px_rgb(24,24,27,0.08)]"
+          >
+            <span
+              data-testid="active-time-readout"
+              className="flex items-center gap-1.5 pl-2.5 pr-1.5 font-mono-tabular text-[11px] font-bold text-[#18181B]"
+            >
+              <Clock className="h-3.5 w-3.5 text-[#E8612C]" />
+              <span>{cycleState.formattedTime}</span>
+            </span>
+            {DAY_NIGHT_PRESETS.map((preset) => {
+              const isSelected =
+                !dayNightCycleActive && cycleState.phaseId === preset.id;
+              return (
+                <button
+                  key={preset.id}
+                  type="button"
+                  data-testid={`time-preset-${preset.id}`}
+                  onClick={() => onSelectTimeOfDayHour(preset.hour)}
+                  className={`rounded-full px-2.5 py-1 text-[11px] font-bold transition-all cursor-pointer ${
+                    isSelected
+                      ? 'bg-[#18181B] text-white shadow-sm'
+                      : 'text-[#57534E] hover:bg-[#EFECE4] hover:text-[#18181B]'
+                  }`}
+                >
+                  {preset.label}
+                </button>
+              );
+            })}
+            {onToggleDayNightCycle && (
+              <button
+                type="button"
+                data-testid="toggle-day-night-cycle"
+                onClick={onToggleDayNightCycle}
+                title="Putar siklus pencahayaan 24 jam otomatis"
+                className={`rounded-full px-2.5 py-1 text-[11px] font-bold transition-all cursor-pointer ${
+                  dayNightCycleActive
+                    ? 'bg-[#E8612C] text-white shadow-sm'
+                    : 'text-[#E8612C] hover:bg-[#FDF6F2]'
+                }`}
+              >
+                {dayNightCycleActive ? 'Siklus 24J: Aktif' : 'Siklus 24J'}
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Active Floor Summary Pill when on Lantai 2 or Lantai 3 */}
         {activeFloor > 1 && !activeHotspot && (
@@ -798,26 +864,40 @@ export function HeroTourOverlay({
             </span>
           </button>
 
-          {/* Day / Night Mode 3D Lighting Toggle */}
+          {/* Dynamic Day / Night Cycle 3D Lighting Toggle */}
           <button
             type="button"
             onClick={onToggleNightMode}
             data-testid="toggle-night-mode"
             className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-semibold shadow-sm transition-colors cursor-pointer ${
-              isNightMode
+              cycleState.phaseId === 'night'
                 ? 'border-[#3B82F6] bg-[#1E293B] text-white'
-                : 'border-[#E5DFD3] bg-[#FAF8F4]/95 text-[#57534E] hover:text-[#18181B]'
+                : cycleState.phaseId === 'dusk'
+                  ? 'border-[#F97316] bg-[#FFF7ED] text-[#9A3412]'
+                  : 'border-[#E5DFD3] bg-[#FAF8F4]/95 text-[#57534E] hover:text-[#18181B]'
             }`}
           >
-            {isNightMode ? (
+            {cycleState.phaseId === 'night' ? (
               <>
                 <Moon className="h-3 w-3 text-[#60A5FA]" />
-                <span>Mode Malam · IGD 24 Jam</span>
+                <span>
+                  Mode Malam · {cycleState.formattedTime} · IGD 24 Jam
+                </span>
+              </>
+            ) : cycleState.phaseId === 'dusk' ? (
+              <>
+                <Sunset className="h-3 w-3 text-[#F97316]" />
+                <span>Mode Senja · {cycleState.formattedTime}</span>
+              </>
+            ) : cycleState.phaseId === 'dawn' ? (
+              <>
+                <Sunrise className="h-3 w-3 text-[#E8612C]" />
+                <span>Mode Pagi · {cycleState.formattedTime}</span>
               </>
             ) : (
               <>
                 <Sun className="h-3 w-3 text-[#E8612C]" />
-                <span>Mode Siang</span>
+                <span>Mode Siang · {cycleState.formattedTime}</span>
               </>
             )}
           </button>

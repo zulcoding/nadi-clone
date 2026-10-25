@@ -2,6 +2,8 @@ import * as React from 'react';
 import { CalendarCheck, Tv } from 'lucide-react';
 import { TOUR_STEPS, type DoctorItem, type McuPackageItem } from './data';
 import {
+  computeDayNightCycleState,
+  getCurrentLocalHour,
   getFloatingInfoPointDetails,
   getHotspotDetails,
   scrollProgressToTourStep,
@@ -30,7 +32,11 @@ export function HomePage() {
   const [autoTourActive, setAutoTourActive] = React.useState<boolean>(false);
   const [followCamTight, setFollowCamTight] = React.useState<boolean>(false);
   const [activeFloor, setActiveFloor] = React.useState<FloorId>(1);
-  const [isNightMode, setIsNightMode] = React.useState<boolean>(false);
+  const [timeOfDayHour, setTimeOfDayHour] = React.useState<number>(() =>
+    getCurrentLocalHour()
+  );
+  const [dayNightCycleActive, setDayNightCycleActive] =
+    React.useState<boolean>(false);
   const [ambientAudioEnabled, setAmbientAudioEnabled] =
     React.useState<boolean>(true);
   const [activeQueueCode, setActiveQueueCode] = React.useState<string>('A-012');
@@ -40,6 +46,9 @@ export function HomePage() {
   const [selectedInfoPointId, setSelectedInfoPointId] = React.useState<
     string | null
   >(null);
+
+  const dayNightState = computeDayNightCycleState(timeOfDayHour);
+  const isNightMode = dayNightState.isDarkUI;
 
   const [bookingOpen, setBookingOpen] = React.useState(false);
   const [bookingSpecialtyId, setBookingSpecialtyId] = React.useState<
@@ -140,6 +149,28 @@ export function HomePage() {
     rafId = requestAnimationFrame(advanceAutoTour);
     return () => cancelAnimationFrame(rafId);
   }, [autoTourActive]);
+
+  // Continuous 24-Hour Day-Night Cycle Time-Lapse when dayNightCycleActive is enabled
+  React.useEffect(() => {
+    if (!dayNightCycleActive) return;
+    const intervalId = window.setInterval(() => {
+      setTimeOfDayHour((prev) => Number(((prev + 0.25) % 24).toFixed(2)));
+    }, 140);
+    return () => window.clearInterval(intervalId);
+  }, [dayNightCycleActive]);
+
+  const handleToggleNightMode = () => {
+    setDayNightCycleActive(false);
+    setTimeOfDayHour((prev) => {
+      const current = computeDayNightCycleState(prev);
+      return current.isDarkUI ? 12.0 : 21.5;
+    });
+  };
+
+  const handleSelectTimeOfDayHour = (hour: number) => {
+    setDayNightCycleActive(false);
+    setTimeOfDayHour(hour);
+  };
 
   const handleSelectTourStep = (stepIndex: number) => {
     setAutoTourActive(false);
@@ -258,6 +289,7 @@ export function HomePage() {
                 followCamTight={followCamTight}
                 activeFloor={activeFloor}
                 isNightMode={isNightMode}
+                timeOfDayHour={timeOfDayHour}
                 ambientAudioEnabled={ambientAudioEnabled}
                 activeQueueCode={activeQueueCode}
                 selectedHotspotId={selectedHotspotId}
@@ -279,7 +311,13 @@ export function HomePage() {
               activeFloor={activeFloor}
               onSelectFloor={setActiveFloor}
               isNightMode={isNightMode}
-              onToggleNightMode={() => setIsNightMode((prev) => !prev)}
+              onToggleNightMode={handleToggleNightMode}
+              timeOfDayHour={timeOfDayHour}
+              onSelectTimeOfDayHour={handleSelectTimeOfDayHour}
+              dayNightCycleActive={dayNightCycleActive}
+              onToggleDayNightCycle={() =>
+                setDayNightCycleActive((prev) => !prev)
+              }
               ambientAudioEnabled={ambientAudioEnabled}
               onToggleAmbientAudio={() =>
                 setAmbientAudioEnabled((prev) => !prev)

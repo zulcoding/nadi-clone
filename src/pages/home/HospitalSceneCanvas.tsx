@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { TOUR_STEPS } from './data';
 import {
+  computeDayNightCycleState,
   getFloorConfig,
   interpolateTourCameraState,
   type FloorId,
@@ -24,6 +25,7 @@ export interface HospitalSceneCanvasProps {
   followCamTight?: boolean;
   activeFloor?: FloorId;
   isNightMode?: boolean;
+  timeOfDayHour?: number;
   ambientAudioEnabled?: boolean;
   activeQueueCode?: string;
   selectedHotspotId?: boolean | string | null;
@@ -87,6 +89,7 @@ export function HospitalSceneCanvas({
   followCamTight = false,
   activeFloor = 1,
   isNightMode = false,
+  timeOfDayHour,
   ambientAudioEnabled = true,
   activeQueueCode = 'A-012',
   selectedHotspotId = null,
@@ -101,11 +104,15 @@ export function HospitalSceneCanvas({
     maxAnisotropy: number;
   } | null>(null);
 
+  const effectiveHour =
+    timeOfDayHour !== undefined ? timeOfDayHour : isNightMode ? 21.5 : 12.0;
+
   const stateRef = React.useRef({
     activeStep,
     followCamTight,
     activeFloor,
     isNightMode,
+    effectiveHour,
     ambientAudioEnabled,
     selectedHotspotId,
     onSelectHotspot,
@@ -118,6 +125,7 @@ export function HospitalSceneCanvas({
     stateRef.current.followCamTight = followCamTight;
     stateRef.current.activeFloor = activeFloor;
     stateRef.current.isNightMode = isNightMode;
+    stateRef.current.effectiveHour = effectiveHour;
     stateRef.current.ambientAudioEnabled = ambientAudioEnabled;
     stateRef.current.selectedHotspotId = selectedHotspotId;
     stateRef.current.onSelectHotspot = onSelectHotspot;
@@ -131,6 +139,7 @@ export function HospitalSceneCanvas({
     followCamTight,
     activeFloor,
     isNightMode,
+    effectiveHour,
     ambientAudioEnabled,
     selectedHotspotId,
     onSelectHotspot,
@@ -215,8 +224,11 @@ export function HospitalSceneCanvas({
     ).texture;
     pmremGenerator.dispose();
 
-    // Warm/Cool Studio Lighting Rig
-    const hemiLight = new THREE.HemisphereLight(0xfff8eb, 0xe5dec9, 0.95);
+    // Warm/Cool Studio & Dynamic Day-Night Cycle Lighting Rig
+    const ambientLight = new THREE.AmbientLight(0xfffbeb, 0.2);
+    scene.add(ambientLight);
+
+    const hemiLight = new THREE.HemisphereLight(0xfff8eb, 0xe5dec9, 0.8);
     hemiLight.position.set(0, 30, 0);
     scene.add(hemiLight);
 
@@ -394,7 +406,7 @@ export function HospitalSceneCanvas({
     let currentExtPatientT = 0;
     let currentBankZ = 0;
     let currentFov = 34;
-    let smoothNight = stateRef.current.isNightMode ? 1 : 0;
+    let smoothHour = stateRef.current.effectiveHour;
     let smoothFloorElevation = getFloorConfig(
       stateRef.current.activeFloor
     ).cameraElevationOffset;
@@ -433,29 +445,55 @@ export function HospitalSceneCanvas({
         : Math.min(rawDt, 0.06);
       const elapsed = clock.getElapsedTime();
 
-      // 0. Smooth Day / Night Mode Atmosphere & Lighting Interpolation
-      const targetNight = stateRef.current.isNightMode ? 1 : 0;
-      smoothNight = THREE.MathUtils.damp(
-        smoothNight,
-        targetNight,
-        isSoftwareGl ? 8.0 : 4.5,
-        dt
-      );
-      bgColor.lerpColors(_daySkyColor, _nightSkyColor, smoothNight);
-      sceneFog.color.copy(bgColor);
-      groundMat.color.lerpColors(
-        _dayGroundColor,
-        _nightGroundColor,
-        smoothNight
-      );
-      hemiLight.intensity = THREE.MathUtils.lerp(0.95, 0.45, smoothNight);
-      keyLight.intensity = THREE.MathUtils.lerp(1.55, 0.68, smoothNight);
-      rimLight.color.lerpColors(_dayRimColor, _nightRimColor, smoothNight);
-      rimLight.intensity = THREE.MathUtils.lerp(0.65, 1.35, smoothNight);
+      // 0. Dynamic 24-Hour Day-Night Cycle Atmosphere, Sun/Moon Trajectory & Lighting Interpolation
+      const targetHour = stateRef.current.effectiveHour;
+      let hourDiff = ((targetHour - smoothHour + 12) % 24) - 12;
+      if (hourDiff < -12) hourDiff += 24;
+      smoothHour =
+        (smoothHour +
+          hourDiff * (1 - Math.exp(-(isSoftwareGl ? 8.5 : 5.0) * dt)) +
+          24) %
+        24;
 
-      // Pulse ambulance siren in Night Mode
+      const cycle = computeDayNightCycleState(smoothHour);
+      bgColor.setHex(cycle.skyBgColorHex);
+      sceneFog.color.copy(bgColor);
+      groundMat.color.setHex(cycle.groundColorHex);
+
+      ambientLight.color.setHex(cycle.ambientColorHex);
+      ambientLight.intensity = cycle.ambientIntensity * 0.38;
+
+      hemiLight.color.setHex(cycle.hemiSkyColorHex);
+      hemiLight.groundColor.setHex(cycle.hemiGroundColorHex);
+      hemiLight.intensity = cycle.hemiIntensity * 0.82;
+
+      keyLight.color.setHex(cycle.directionalColorHex);
+      keyLight.intensity = cycle.directionalIntensity;
+      keyLight.position.set(
+        cycle.sunPosition[0],
+        cycle.sunPosition[1],
+        cycle.sunPosition[2]
+      );
+
+      rimLight.color.setHex(cycle.rimColorHex);
+      rimLight.intensity = cycle.rimIntensity;
+
+      mats.warmWindowGlow.emissiveIntensity = cycle.windowGlowIntensity;
+
+      // Pulse ambulance siren dynamically during Dusk & Night
       sirenBarMat.emissiveIntensity =
-        0.25 + smoothNight * (0.9 + Math.sin(elapsed * 12.0) * 0.65);
+        0.25 + cycle.nightFactor * (0.9 + Math.sin(elapsed * 12.0) * 0.65);
+
+      if (container) {
+        container.dataset.timePhase = cycle.phaseId;
+        container.dataset.timeFormatted = cycle.formattedTime;
+        container.dataset.ambientLightIntensity = String(cycle.ambientIntensity);
+        container.dataset.directionalLightIntensity = String(
+          cycle.directionalIntensity
+        );
+        container.dataset.sunPosX = String(cycle.sunPosition[0]);
+        container.dataset.sunPosY = String(cycle.sunPosition[1]);
+      }
 
       // 1. Smoothly damp continuous scroll/tour progress
       const targetContinuous = continuousStepRef.current;

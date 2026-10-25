@@ -622,4 +622,306 @@ export function getFloatingInfoPointForStep(
   );
 }
 
+export type DayNightPhase = 'dawn' | 'day' | 'dusk' | 'night';
+
+export interface DayNightCycleState {
+  hourOfDay: number;
+  formattedTime: string;
+  phaseId: DayNightPhase;
+  phaseLabel: string;
+  isDarkUI: boolean;
+  nightFactor: number;
+  sunPosition: [number, number, number];
+  ambientColorHex: number;
+  ambientIntensity: number;
+  hemiSkyColorHex: number;
+  hemiGroundColorHex: number;
+  hemiIntensity: number;
+  directionalColorHex: number;
+  directionalIntensity: number;
+  rimColorHex: number;
+  rimIntensity: number;
+  skyBgColorHex: number;
+  groundColorHex: number;
+  windowGlowIntensity: number;
+}
+
+export const DAY_NIGHT_PRESETS: Array<{
+  id: DayNightPhase;
+  label: string;
+  timeLabel: string;
+  hour: number;
+}> = [
+  { id: 'dawn', label: 'Pagi', timeLabel: '06:30', hour: 6.5 },
+  { id: 'day', label: 'Siang', timeLabel: '12:00', hour: 12.0 },
+  { id: 'dusk', label: 'Senja', timeLabel: '17:30', hour: 17.5 },
+  { id: 'night', label: 'Malam', timeLabel: '21:30', hour: 21.5 },
+];
+
+export function getCurrentLocalHour(now: Date = new Date()): number {
+  const h = now.getHours() + now.getMinutes() / 60;
+  return Number(h.toFixed(2));
+}
+
+function lerpColorHex(hexA: number, hexB: number, t: number): number {
+  const clamped = Math.max(0, Math.min(1, t));
+  const rA = (hexA >> 16) & 0xff;
+  const gA = (hexA >> 8) & 0xff;
+  const bA = hexA & 0xff;
+  const rB = (hexB >> 16) & 0xff;
+  const gB = (hexB >> 8) & 0xff;
+  const bB = hexB & 0xff;
+  const r = Math.round(rA + (rB - rA) * clamped);
+  const g = Math.round(gA + (gB - gA) * clamped);
+  const b = Math.round(bA + (bB - bA) * clamped);
+  return (r << 16) | (g << 8) | b;
+}
+
+function lerpNum(a: number, b: number, t: number): number {
+  const clamped = Math.max(0, Math.min(1, t));
+  return Number((a + (b - a) * clamped).toFixed(4));
+}
+
+/**
+ * Computes realistic 3D ambient, hemisphere, directional, and rim lighting parameters,
+ * plus sun/moon orbital coordinates and architectural window emissive glow for any hour (0..24).
+ */
+export function computeDayNightCycleState(hourInput: number): DayNightCycleState {
+  const normalizedHour = ((hourInput % 24) + 24) % 24;
+  const wholeHours = Math.floor(normalizedHour);
+  const minutes = Math.round((normalizedHour - wholeHours) * 60) % 60;
+  const formattedTime = `${String(wholeHours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+
+  // Determine discrete phase label
+  let phaseId: DayNightPhase;
+  let phaseLabel: string;
+  if (normalizedHour >= 5.5 && normalizedHour < 8.5) {
+    phaseId = 'dawn';
+    phaseLabel = 'Pagi Cerah';
+  } else if (normalizedHour >= 8.5 && normalizedHour < 16.25) {
+    phaseId = 'day';
+    phaseLabel = 'Siang Hari';
+  } else if (normalizedHour >= 16.25 && normalizedHour < 18.75) {
+    phaseId = 'dusk';
+    phaseLabel = 'Senja Keemasan';
+  } else {
+    phaseId = 'night';
+    phaseLabel = 'Malam · IGD 24 Jam';
+  }
+
+  // Keyframes across the 24-hour cycle:
+  // 00:00 (Midnight), 06:30 (Dawn), 12:00 (Midday), 17:30 (Golden Dusk), 20:30 (Night), 24:00 (Midnight)
+  interface LightingKeyframe {
+    hour: number;
+    nightFactor: number;
+    ambientColor: number;
+    ambientIntensity: number;
+    hemiSky: number;
+    hemiGround: number;
+    hemiIntensity: number;
+    dirColor: number;
+    dirIntensity: number;
+    rimColor: number;
+    rimIntensity: number;
+    skyBg: number;
+    ground: number;
+    windowGlow: number;
+  }
+
+  const keyframes: LightingKeyframe[] = [
+    {
+      hour: 0,
+      nightFactor: 1.0,
+      ambientColor: 0x1e293b,
+      ambientIntensity: 0.22,
+      hemiSky: 0x1e293b,
+      hemiGround: 0x0f172a,
+      hemiIntensity: 0.45,
+      dirColor: 0x93c5fd,
+      dirIntensity: 0.68,
+      rimColor: 0x60a5fa,
+      rimIntensity: 1.35,
+      skyBg: 0x131926,
+      ground: 0x182030,
+      windowGlow: 0.92,
+    },
+    {
+      hour: 5.2,
+      nightFactor: 0.92,
+      ambientColor: 0x263248,
+      ambientIntensity: 0.25,
+      hemiSky: 0x28354a,
+      hemiGround: 0x182030,
+      hemiIntensity: 0.5,
+      dirColor: 0xa5b4fc,
+      dirIntensity: 0.72,
+      rimColor: 0x818cf8,
+      rimIntensity: 1.2,
+      skyBg: 0x182032,
+      ground: 0x1e2638,
+      windowGlow: 0.85,
+    },
+    {
+      hour: 6.5, // Dawn / Morning Sunrise
+      nightFactor: 0.22,
+      ambientColor: 0xffedd5,
+      ambientIntensity: 0.42,
+      hemiSky: 0xffe4c4,
+      hemiGround: 0xd6c7b2,
+      hemiIntensity: 0.78,
+      dirColor: 0xffb074,
+      dirIntensity: 1.28,
+      rimColor: 0xfdba74,
+      rimIntensity: 0.92,
+      skyBg: 0xf3e7d8,
+      ground: 0xede0cf,
+      windowGlow: 0.45,
+    },
+    {
+      hour: 9.0, // Morning Studio
+      nightFactor: 0.0,
+      ambientColor: 0xfffbeb,
+      ambientIntensity: 0.52,
+      hemiSky: 0xfff8eb,
+      hemiGround: 0xe5dec9,
+      hemiIntensity: 0.95,
+      dirColor: 0xfff1dc,
+      dirIntensity: 1.55,
+      rimColor: 0xfde6d2,
+      rimIntensity: 0.65,
+      skyBg: 0xf6f2ea,
+      ground: 0xf4efe4,
+      windowGlow: 0.28,
+    },
+    {
+      hour: 15.5, // Afternoon Studio
+      nightFactor: 0.0,
+      ambientColor: 0xfffbeb,
+      ambientIntensity: 0.52,
+      hemiSky: 0xfff8eb,
+      hemiGround: 0xe5dec9,
+      hemiIntensity: 0.95,
+      dirColor: 0xfff1dc,
+      dirIntensity: 1.55,
+      rimColor: 0xfde6d2,
+      rimIntensity: 0.65,
+      skyBg: 0xf6f2ea,
+      ground: 0xf4efe4,
+      windowGlow: 0.3,
+    },
+    {
+      hour: 17.5, // Golden Hour / Dusk
+      nightFactor: 0.38,
+      ambientColor: 0xfed7aa,
+      ambientIntensity: 0.36,
+      hemiSky: 0xfdba74,
+      hemiGround: 0x9a7b69,
+      hemiIntensity: 0.72,
+      dirColor: 0xf97316,
+      dirIntensity: 1.18,
+      rimColor: 0xfb923c,
+      rimIntensity: 1.08,
+      skyBg: 0xe7d4c5,
+      ground: 0xdec8b6,
+      windowGlow: 0.68,
+    },
+    {
+      hour: 19.2, // Early Night Transition
+      nightFactor: 0.95,
+      ambientColor: 0x1e293b,
+      ambientIntensity: 0.22,
+      hemiSky: 0x1e293b,
+      hemiGround: 0x0f172a,
+      hemiIntensity: 0.45,
+      dirColor: 0x93c5fd,
+      dirIntensity: 0.68,
+      rimColor: 0x60a5fa,
+      rimIntensity: 1.35,
+      skyBg: 0x131926,
+      ground: 0x182030,
+      windowGlow: 0.92,
+    },
+    {
+      hour: 24.0,
+      nightFactor: 1.0,
+      ambientColor: 0x1e293b,
+      ambientIntensity: 0.22,
+      hemiSky: 0x1e293b,
+      hemiGround: 0x0f172a,
+      hemiIntensity: 0.45,
+      dirColor: 0x93c5fd,
+      dirIntensity: 0.68,
+      rimColor: 0x60a5fa,
+      rimIntensity: 1.35,
+      skyBg: 0x131926,
+      ground: 0x182030,
+      windowGlow: 0.92,
+    },
+  ];
+
+  let k0 = keyframes[0];
+  let k1 = keyframes[keyframes.length - 1];
+  for (let i = 0; i < keyframes.length - 1; i++) {
+    if (
+      normalizedHour >= keyframes[i].hour &&
+      normalizedHour <= keyframes[i + 1].hour
+    ) {
+      k0 = keyframes[i];
+      k1 = keyframes[i + 1];
+      break;
+    }
+  }
+
+  const span = Math.max(0.0001, k1.hour - k0.hour);
+  const rawT = (normalizedHour - k0.hour) / span;
+  const t = smoothstep01(rawT);
+
+  // Compute Sun / Moon 3D orbital trajectory across the sky
+  // During daytime (05:30 -> 18:30), sun arcs from East (+22) through zenith (y=28) to West (-22)
+  // During night (18:30 -> 05:30), moon arcs softly overhead so shadows remain crisp and readable
+  let sunX: number;
+  let sunY: number;
+  let sunZ: number;
+  if (normalizedHour >= 5.5 && normalizedHour <= 18.5) {
+    const dayProgress = (normalizedHour - 5.5) / 13.0; // 0..1
+    const angle = dayProgress * Math.PI; // 0 -> PI
+    sunX = Number((Math.cos(angle) * 22).toFixed(2));
+    sunY = Number((10 + Math.sin(angle) * 18).toFixed(2));
+    sunZ = Number((16 + Math.sin(angle) * 4).toFixed(2));
+  } else {
+    const nightHours =
+      normalizedHour > 18.5 ? normalizedHour - 18.5 : normalizedHour + 5.5;
+    const nightProgress = nightHours / 11.0; // 0..1
+    const angle = nightProgress * Math.PI;
+    sunX = Number((-Math.cos(angle) * 16).toFixed(2));
+    sunY = Number((14 + Math.sin(angle) * 12).toFixed(2));
+    sunZ = Number((18 + Math.sin(angle) * 3).toFixed(2));
+  }
+
+  const nightFactor = lerpNum(k0.nightFactor, k1.nightFactor, t);
+
+  return {
+    hourOfDay: Number(normalizedHour.toFixed(2)),
+    formattedTime,
+    phaseId,
+    phaseLabel,
+    isDarkUI: nightFactor > 0.6,
+    nightFactor,
+    sunPosition: [sunX, sunY, sunZ],
+    ambientColorHex: lerpColorHex(k0.ambientColor, k1.ambientColor, t),
+    ambientIntensity: lerpNum(k0.ambientIntensity, k1.ambientIntensity, t),
+    hemiSkyColorHex: lerpColorHex(k0.hemiSky, k1.hemiSky, t),
+    hemiGroundColorHex: lerpColorHex(k0.hemiGround, k1.hemiGround, t),
+    hemiIntensity: lerpNum(k0.hemiIntensity, k1.hemiIntensity, t),
+    directionalColorHex: lerpColorHex(k0.dirColor, k1.dirColor, t),
+    directionalIntensity: lerpNum(k0.dirIntensity, k1.dirIntensity, t),
+    rimColorHex: lerpColorHex(k0.rimColor, k1.rimColor, t),
+    rimIntensity: lerpNum(k0.rimIntensity, k1.rimIntensity, t),
+    skyBgColorHex: lerpColorHex(k0.skyBg, k1.skyBg, t),
+    groundColorHex: lerpColorHex(k0.ground, k1.ground, t),
+    windowGlowIntensity: lerpNum(k0.windowGlow, k1.windowGlow, t),
+  };
+}
+
+
 
