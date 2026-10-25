@@ -356,3 +356,270 @@ export function interpolateTourCameraState(continuousStep: number): {
     interiorFactor,
   };
 }
+
+export interface HospitalAmbientMix {
+  masterGain: number;
+  chatterGain: number;
+  equipmentHumGain: number;
+  footstepGain: number;
+  lowpassCutoffHz: number;
+}
+
+/**
+ * Computes the subtle, low-volume procedural audio mix for the 3D hospital environment.
+ * As the user enters the building (`interiorFactor` 0 -> 1), the interior ambient layers
+ * (distant lobby chatter, quiet medical equipment hum, soft footsteps) fade in smoothly
+ * and the acoustic low-pass filter opens up from muffled exterior (320 Hz) to indoor (1450 Hz).
+ */
+export function computeHospitalAmbientMix(params: {
+  interiorFactor: number;
+  walkStrength: number;
+  activeStationStage: number | null;
+  enabled: boolean;
+}): HospitalAmbientMix {
+  if (!params.enabled) {
+    return {
+      masterGain: 0,
+      chatterGain: 0,
+      equipmentHumGain: 0,
+      footstepGain: 0,
+      lowpassCutoffHz: 320,
+    };
+  }
+
+  const interior = Math.max(0, Math.min(1, params.interiorFactor));
+  const walk = Math.max(0, Math.min(1, params.walkStrength));
+  const envCurve = smoothstep01(interior);
+
+  // Subtle master gain fades in from whisper-quiet exterior (0.008) to low-volume indoor (0.085)
+  const masterGain = Number((0.008 + envCurve * 0.077).toFixed(4));
+
+  // Distant lobby/corridor murmur (warmest near Pendaftaran, Farmasi, and Kasir)
+  const stageChatterBoost =
+    params.activeStationStage === 1
+      ? 1.25
+      : params.activeStationStage === 4 || params.activeStationStage === 5
+        ? 1.15
+        : 0.9;
+  const chatterGain = Number(
+    (envCurve * 0.034 * stageChatterBoost).toFixed(4)
+  );
+
+  // Quiet medical equipment hum (strongest in Poliklinik Stage 2 & Lab/Radiologi Stage 3)
+  const stageHumBoost =
+    params.activeStationStage === 3
+      ? 1.45
+      : params.activeStationStage === 2
+        ? 1.25
+        : 0.85;
+  const equipmentHumGain = Number(
+    (envCurve * 0.026 * stageHumBoost).toFixed(4)
+  );
+
+  // Soft footsteps when character is walking (active during entrance walk-in and indoor corridor travel)
+  const footstepPresence = Math.max(0.28, envCurve);
+  const footstepGain = Number(
+    (walk * footstepPresence * 0.052).toFixed(4)
+  );
+
+  // Acoustic filter opens up as camera moves inside the building
+  const lowpassCutoffHz = Math.round(320 + envCurve * 1130);
+
+  return {
+    masterGain,
+    chatterGain,
+    equipmentHumGain,
+    footstepGain,
+    lowpassCutoffHz,
+  };
+}
+
+export type FloatingInfoPointCategory = 'health-tip' | 'directory';
+
+export interface FloatingInfoPointDetail {
+  id: string;
+  category: FloatingInfoPointCategory;
+  categoryBadge: string;
+  stepIndex: number;
+  shortBadgeLabel: string;
+  zoneLabel: string;
+  floorLocation: string;
+  operatingHours: string;
+  title: string;
+  summary: string;
+  bulletPoints: string[];
+  clinicalNote: string;
+  relatedSpecialtyId: string;
+  ctaLabel: string;
+  position3D: [number, number, number];
+}
+
+export const FLOATING_INFO_POINTS: FloatingInfoPointDetail[] = [
+  {
+    id: 'info-gedung-direktori',
+    category: 'directory',
+    categoryBadge: 'Direktori & Panduan RS',
+    stepIndex: 0,
+    shortBadgeLabel: 'DIREKTORI GEDUNG',
+    zoneLabel: 'Eksterior & Lobi Utama',
+    floorLocation: 'Gedung A · Lantai 1–3 & Kanopi Barat IGD',
+    operatingHours: 'IGD 24 Jam · Poliklinik 07:00 – 21:00 WIB',
+    title: 'Direktori Gedung Utama & Akses IGD 24 Jam',
+    summary:
+      'Panduan navigasi cepat seluruh fasilitas medis, jalur drop-off ramah kursi roda, dan pembagian lantai spesialis RS Nadi.',
+    bulletPoints: [
+      'Lantai 1: Lobi Utama, Pendaftaran Digital, Poliklinik Spesialis, Lab & Radiologi, Farmasi, dan Kasir Terpadu.',
+      'Lantai 2: Pusat Jantung Terpadu (Echo 4D & Treadmill) serta Klinik Tumbuh Kembang Anak.',
+      'Lantai 3: Pusat Bedah Minimal Invasif, Klinik Mata & Saraf, serta Ruang Pemulihan Eksekutif.',
+    ],
+    clinicalNote:
+      'Pasien darurat medis atau nyeri dada akut disarankan langsung menuju Kanopi IGD 24 Jam di sisi barat gedung tanpa perlu antrean lobi.',
+    relatedSpecialtyId: 'jantung',
+    ctaLabel: 'Jadwalkan Kunjungan Poliklinik',
+    position3D: [1.8, 3.85, 3.3],
+  },
+  {
+    id: 'info-pendaftaran-direktori',
+    category: 'directory',
+    categoryBadge: 'Direktori & Panduan RS',
+    stepIndex: 1,
+    shortBadgeLabel: 'PANDUAN CHECK-IN',
+    zoneLabel: 'Zona 1 · Pendaftaran',
+    floorLocation: 'Gedung A · Lantai 1 · Sayap Barat (Loket 1–3)',
+    operatingHours: 'Senin – Minggu · 06:30 – 20:30 WIB',
+    title: 'Panduan Check-In Mandiri, BPJS & Asuransi Rekanan',
+    summary:
+      'Proses verifikasi identitas dan aktivasi E-Tiket berlangsung kurang dari 2 menit tanpa pengisian formulir kertas berulang.',
+    bulletPoints: [
+      'Siapkan QR E-Tiket dari aplikasi Nadi atau KTP/KIA untuk pemindaian cepat di Loket 2.',
+      'Pasien BPJS Kesehatan cukup memindai rujukan aktif Faskes 1 melalui fitur Mobile JKN.',
+      'Tersedia jalur prioritas khusus lansia (>65 tahun), ibu hamil, dan pasien disabilitas di Loket 1.',
+    ],
+    clinicalNote:
+      'Hadir 15 menit sebelum jadwal konsultasi memastikan pemeriksaan tanda vital oleh perawat berjalan tenang dan tepat waktu.',
+    relatedSpecialtyId: 'penyakit-dalam',
+    ctaLabel: 'Ambil Antrean Online Sekarang',
+    position3D: [-5.2, 3.9, -3.2],
+  },
+  {
+    id: 'info-poliklinik-tips',
+    category: 'health-tip',
+    categoryBadge: 'Tips Kesehatan',
+    stepIndex: 2,
+    shortBadgeLabel: 'TIPS TENSI & JANTUNG',
+    zoneLabel: 'Zona 2 · Poliklinik',
+    floorLocation: 'Gedung A · Lantai 1 · Ruang Konsultasi 101–108',
+    operatingHours: 'Senin – Sabtu · 08:00 – 20:00 WIB',
+    title: 'Tips Kesehatan: Persiapan Cek Tensi & Konsultasi Dokter',
+    summary:
+      'Cara menjaga akurasi pengukuran tekanan darah dan memaksimalkan waktu konsultasi bersama dokter spesialis.',
+    bulletPoints: [
+      'Duduk rileks selama 5 menit sebelum tensi diukur; hindari konsumsi kafein atau merokok 30 menit sebelumnya.',
+      'Tekanan darah optimal dewasa berada di kisaran <120/80 mmHg dengan detak nadi istirahat 60–100 bpm.',
+      'Catat riwayat gejala, durasi keluhan, serta daftar obat rutin yang sedang dikonsumsi untuk ditunjukkan ke dokter.',
+    ],
+    clinicalNote:
+      'Deteksi dini hipertensi mengurangi risiko komplikasi kardiovaskular hingga 45%. Lakukan skrining berkala setiap 6 bulan.',
+    relatedSpecialtyId: 'jantung',
+    ctaLabel: 'Konsultasi Spesialis Jantung / Dalam',
+    position3D: [1.8, 3.9, -2.5],
+  },
+  {
+    id: 'info-radiologi-tips',
+    category: 'health-tip',
+    categoryBadge: 'Tips Kesehatan',
+    stepIndex: 3,
+    shortBadgeLabel: 'TIPS PUASA LAB',
+    zoneLabel: 'Zona 3 · Lab & Radiologi',
+    floorLocation: 'Gedung A · Lantai 1 · Sayap Diagnostik Terpadu',
+    operatingHours: 'Layanan Lab & Radiologi 24 Jam',
+    title: 'Tips Kesehatan: Panduan Puasa Lab & Keamanan Sinar-X',
+    summary:
+      'Persiapan pra-analitik yang tepat menjamin hasil pemeriksaan darah lengkap, profil lipid, dan rontgen thorax yang akurat.',
+    bulletPoints: [
+      'Puasa makan selama 8–10 jam untuk cek Gula Darah Puasa & Kolesterol (minum air putih tawar tetap diperbolehkan).',
+      'Lepaskan perhiasan logam, kalung, atau kancing besi di area dada sebelum pemeriksaan Rontgen Thorax Digital.',
+      'Informasikan kepada petugas radiografer apabila Anda sedang hamil atau menduga adanya kehamilan.',
+    ],
+    clinicalNote:
+      'Sistem Digital Radiography (DR) RS Nadi menggunakan dosis radiasi ultra-rendah (hingga 70% lebih rendah dibanding rontgen konvensional).',
+    relatedSpecialtyId: 'penyakit-dalam',
+    ctaLabel: 'Daftar Medical Check-Up & Lab',
+    position3D: [8.6, 3.9, -3.4],
+  },
+  {
+    id: 'info-farmasi-tips',
+    category: 'health-tip',
+    categoryBadge: 'Tips Kesehatan',
+    stepIndex: 4,
+    shortBadgeLabel: 'TIPS OBAT AMAN',
+    zoneLabel: 'Zona 4 · Farmasi Klinik',
+    floorLocation: 'Gedung A · Lantai 1 · Sayap Timur',
+    operatingHours: 'Farmasi Rawat Jalan & IGD 24 Jam',
+    title: 'Tips Kesehatan: Prinsip 5 Benar Konsumsi Obat & Antibiotik',
+    summary:
+      'Edukasi apoteker klinis agar terapi obat bekerja efektif, aman bagi lambung, dan bebas interaksi obat yang merugikan.',
+    bulletPoints: [
+      'Patuhi aturan waktu minum obat: sebelum makan (30 menit sebelum) atau sesudah makan sesuai label etiket digital.',
+      'Habiskan seluruh dosis antibiotik yang diresepkan dokter meskipun gejala demam atau nyeri sudah membaik.',
+      'Simpan obat di tempat sejuk dan kering (suhu ruang 15–25°C), jauh dari paparan sinar matahari langsung.',
+    ],
+    clinicalNote:
+      'Gunakan air putih suhu ruang saat menelan obat; hindari minum obat bersamaan dengan susu, teh pekat, atau kopi karena dapat menghambat penyerapan.',
+    relatedSpecialtyId: 'penyakit-dalam',
+    ctaLabel: 'Jadwalkan Konsultasi & Resep',
+    position3D: [12.5, 3.9, 1.8],
+  },
+  {
+    id: 'info-kasir-direktori',
+    category: 'directory',
+    categoryBadge: 'Direktori & Panduan RS',
+    stepIndex: 5,
+    shortBadgeLabel: 'PANDUAN ASURANSI',
+    zoneLabel: 'Zona 5 · Kasir & Asuransi',
+    floorLocation: 'Gedung A · Lantai 1 · Pintu Keluar Timur',
+    operatingHours: 'Kasir Utama & Konter Asuransi 24 Jam',
+    title: 'Panduan Pembayaran Cashless, Asuransi & Pengantaran Obat',
+    summary:
+      'Penyelesaian administrasi transparan dalam satu loket terintegrasi beserta opsi pengiriman obat langsung ke rumah.',
+    bulletPoints: [
+      'Mendukung pembayaran instan via QRIS, kartu debit/kredit semua bank, dompet digital, dan penjaminan asuransi korporat.',
+      'E-Kuitansi resmi dan resume medis digital otomatis terkirim ke aplikasi Nadi untuk kemudahan klaim reimbursement.',
+      'Aktifkan layanan Kurir Farmasi Nadi di kasir bila Anda ingin langsung pulang tanpa menunggu racikan obat.',
+    ],
+    clinicalNote:
+      'Seluruh rincian biaya konsultasi, tindakan lab, dan obat ditampilkan secara transparan sebelum Anda melakukan konfirmasi bayar.',
+    relatedSpecialtyId: 'penyakit-dalam',
+    ctaLabel: 'Buat Janji Temu Cashless',
+    position3D: [15.8, 3.9, 2.2],
+  },
+];
+
+export function getFloatingInfoPointDetails(
+  infoPointId: string | null
+): FloatingInfoPointDetail | null {
+  if (!infoPointId) return null;
+  return FLOATING_INFO_POINTS.find((item) => item.id === infoPointId) ?? null;
+}
+
+export function filterFloatingInfoPointsByCategory(
+  category: 'all' | FloatingInfoPointCategory
+): FloatingInfoPointDetail[] {
+  if (category === 'all') return FLOATING_INFO_POINTS;
+  return FLOATING_INFO_POINTS.filter((item) => item.category === category);
+}
+
+export function getFloatingInfoPointForStep(
+  stepIndex: number
+): FloatingInfoPointDetail {
+  const clamped = Math.max(
+    0,
+    Math.min(FLOATING_INFO_POINTS.length - 1, Math.round(stepIndex))
+  );
+  return (
+    FLOATING_INFO_POINTS.find((item) => item.stepIndex === clamped) ??
+    FLOATING_INFO_POINTS[0]
+  );
+}
+
+

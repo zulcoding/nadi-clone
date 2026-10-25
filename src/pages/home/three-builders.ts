@@ -1,6 +1,11 @@
 import * as THREE from 'three';
 import {
+  FLOATING_INFO_POINTS,
+  type FloatingInfoPointDetail,
+} from './booking-logic';
+import {
   createEmergencyCanopyTexture,
+  createFloatingInfoBadgeTexture,
   createNadiLogoTexture,
   createOrangeBannerTexture,
   createQueueScreenTexture,
@@ -254,6 +259,84 @@ function createRoundedBoxShape(w: number, d: number, r: number): THREE.Shape {
   return shape;
 }
 
+export function createFloatingInfoPointGroup(
+  detail: FloatingInfoPointDetail,
+  maxAnisotropy: number,
+  interactablesOut: THREE.Object3D[]
+): THREE.Group {
+  const group = new THREE.Group();
+  const [x, y, z] = detail.position3D;
+  group.position.set(x, y, z);
+  group.userData.infoPointId = detail.id;
+  group.userData.baseY = y;
+  group.userData.stepIndex = detail.stepIndex;
+
+  const isTip = detail.category === 'health-tip';
+  const accentHex = isTip ? 0x10b981 : 0xe8612c;
+
+  // Floating billboard label plane
+  const badgeTex = createFloatingInfoBadgeTexture(
+    detail.shortBadgeLabel,
+    detail.category,
+    maxAnisotropy
+  );
+  const badgeMat = new THREE.MeshBasicMaterial({
+    map: badgeTex,
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const badgePlane = new THREE.Mesh(
+    new THREE.PlaneGeometry(2.45, 0.68),
+    badgeMat
+  );
+  badgePlane.position.set(0, 0.48, 0);
+  badgePlane.userData.infoPointId = detail.id;
+  group.add(badgePlane);
+  interactablesOut.push(badgePlane);
+
+  // Glowing 3D core orb beneath badge
+  const orbMat = new THREE.MeshStandardMaterial({
+    color: accentHex,
+    emissive: accentHex,
+    emissiveIntensity: 0.45,
+    roughness: 0.25,
+    metalness: 0.15,
+  });
+  const orb = new THREE.Mesh(new THREE.SphereGeometry(0.2, 18, 18), orbMat);
+  orb.position.set(0, -0.06, 0);
+  orb.userData.infoPointId = detail.id;
+  group.add(orb);
+  interactablesOut.push(orb);
+
+  // Rotating 3D halo ring around the orb
+  const haloMat = new THREE.MeshBasicMaterial({
+    color: accentHex,
+    transparent: true,
+    opacity: 0.8,
+  });
+  const haloRing = new THREE.Mesh(
+    new THREE.TorusGeometry(0.31, 0.032, 10, 28),
+    haloMat
+  );
+  haloRing.position.set(0, -0.06, 0);
+  haloRing.userData.infoPointId = detail.id;
+  haloRing.userData.isHaloRing = true;
+  group.add(haloRing);
+  interactablesOut.push(haloRing);
+
+  // Vertical pointer stem
+  const stem = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.025, 0.025, 0.45, 8),
+    haloMat
+  );
+  stem.position.set(0, -0.38, 0);
+  stem.userData.infoPointId = detail.id;
+  group.add(stem);
+
+  return group;
+}
+
 export function createExteriorHospitalGroup(
   mats: HospitalMaterialSet,
   maxAnisotropy: number
@@ -264,8 +347,12 @@ export function createExteriorHospitalGroup(
   roadCurve: THREE.CatmullRomCurve3;
   exteriorPatient: CharacterRig;
   entranceWalkCurve: THREE.CatmullRomCurve3;
+  exteriorInteractables: THREE.Object3D[];
+  exteriorInfoPoints: THREE.Group[];
 } {
   const exteriorGroup = new THREE.Group();
+  const exteriorInteractables: THREE.Object3D[] = [];
+  const exteriorInfoPoints: THREE.Group[] = [];
 
   // Base ground plaza around building
   const plazaGeo = new THREE.ExtrudeGeometry(
@@ -504,6 +591,17 @@ export function createExteriorHospitalGroup(
   ped2.group.rotation.y = -0.8;
   exteriorGroup.add(ped2.group);
 
+  // Add Exterior 3D Floating Info Point(s) (Step 0: Gedung Utama Directory)
+  FLOATING_INFO_POINTS.filter((pt) => pt.stepIndex === 0).forEach((pt) => {
+    const infoGroup = createFloatingInfoPointGroup(
+      pt,
+      maxAnisotropy,
+      exteriorInteractables
+    );
+    exteriorGroup.add(infoGroup);
+    exteriorInfoPoints.push(infoGroup);
+  });
+
   return {
     exteriorGroup,
     ambulance,
@@ -511,6 +609,8 @@ export function createExteriorHospitalGroup(
     roadCurve,
     exteriorPatient,
     entranceWalkCurve,
+    exteriorInteractables,
+    exteriorInfoPoints,
   };
 }
 
@@ -546,6 +646,7 @@ export function createInteriorHospitalGroup(
   xrayScanBeam: THREE.Mesh;
   interactables: THREE.Object3D[];
   hotspotPins: THREE.Mesh[];
+  infoPointGroups: THREE.Group[];
   staffRigs: {
     receptionist: CharacterRig;
     nurse: CharacterRig;
@@ -560,6 +661,7 @@ export function createInteriorHospitalGroup(
   const interiorGroup = new THREE.Group();
   const interactables: THREE.Object3D[] = [];
   const hotspotPins: THREE.Mesh[] = [];
+  const infoPointGroups: THREE.Group[] = [];
 
   // Large Cutaway Floor Plan Slab with warm peach perimeter wall
   const floorShape = createRoundedBoxShape(28, 17, 2.4);
@@ -1242,6 +1344,17 @@ export function createInteriorHospitalGroup(
   followRing.position.set(startPt.x, 0.03, startPt.z);
   interiorGroup.add(followRing);
 
+  // Add Interior 3D Floating Info Points (Steps 1..5: Health Tips & Hospital Directory)
+  FLOATING_INFO_POINTS.filter((pt) => pt.stepIndex >= 1).forEach((pt) => {
+    const infoGroup = createFloatingInfoPointGroup(
+      pt,
+      maxAnisotropy,
+      interactables
+    );
+    interiorGroup.add(infoGroup);
+    infoPointGroups.push(infoGroup);
+  });
+
   return {
     interiorGroup,
     patientPathCurve,
@@ -1253,6 +1366,7 @@ export function createInteriorHospitalGroup(
     xrayScanBeam,
     interactables,
     hotspotPins,
+    infoPointGroups,
     staffRigs: {
       receptionist: receptionStaffList[1] || receptionStaffList[0],
       nurse,

@@ -2,6 +2,7 @@ import * as React from 'react';
 import { CalendarCheck, Tv } from 'lucide-react';
 import { TOUR_STEPS, type DoctorItem, type McuPackageItem } from './data';
 import {
+  getFloatingInfoPointDetails,
   getHotspotDetails,
   scrollProgressToTourStep,
   type FloorId,
@@ -18,6 +19,7 @@ import { McuPackagesSection } from './McuPackagesSection';
 import { TestimonialsSection } from './TestimonialsSection';
 import { BookingModal } from './BookingModal';
 import { LoginModal } from './LoginModal';
+import { InfoPointModal } from './InfoPointModal';
 
 export function HomePage() {
   const tourTrackRef = React.useRef<HTMLDivElement | null>(null);
@@ -29,8 +31,13 @@ export function HomePage() {
   const [followCamTight, setFollowCamTight] = React.useState<boolean>(false);
   const [activeFloor, setActiveFloor] = React.useState<FloorId>(1);
   const [isNightMode, setIsNightMode] = React.useState<boolean>(false);
+  const [ambientAudioEnabled, setAmbientAudioEnabled] =
+    React.useState<boolean>(true);
   const [activeQueueCode, setActiveQueueCode] = React.useState<string>('A-012');
   const [selectedHotspotId, setSelectedHotspotId] = React.useState<
+    string | null
+  >(null);
+  const [selectedInfoPointId, setSelectedInfoPointId] = React.useState<
     string | null
   >(null);
 
@@ -162,6 +169,15 @@ export function HomePage() {
     }
   };
 
+  const handleSelectInfoPoint = (infoPointId: string | null) => {
+    setAutoTourActive(false);
+    setSelectedInfoPointId(infoPointId);
+    const infoDetails = getFloatingInfoPointDetails(infoPointId);
+    if (infoDetails && activeStep !== infoDetails.stepIndex) {
+      handleSelectTourStep(infoDetails.stepIndex);
+    }
+  };
+
   const handleSimulate3DCheckIn = (queueCode: string) => {
     setActiveQueueCode(queueCode);
     setActiveFloor(1);
@@ -242,9 +258,12 @@ export function HomePage() {
                 followCamTight={followCamTight}
                 activeFloor={activeFloor}
                 isNightMode={isNightMode}
+                ambientAudioEnabled={ambientAudioEnabled}
                 activeQueueCode={activeQueueCode}
                 selectedHotspotId={selectedHotspotId}
                 onSelectHotspot={handleSelectHotspot}
+                selectedInfoPointId={selectedInfoPointId}
+                onSelectInfoPoint={handleSelectInfoPoint}
               />
             </div>
 
@@ -261,10 +280,16 @@ export function HomePage() {
               onSelectFloor={setActiveFloor}
               isNightMode={isNightMode}
               onToggleNightMode={() => setIsNightMode((prev) => !prev)}
+              ambientAudioEnabled={ambientAudioEnabled}
+              onToggleAmbientAudio={() =>
+                setAmbientAudioEnabled((prev) => !prev)
+              }
               activeQueueCode={activeQueueCode}
               onSimulateQueueCall={(code) => setActiveQueueCode(code)}
               selectedHotspotId={selectedHotspotId}
               onSelectHotspot={handleSelectHotspot}
+              selectedInfoPointId={selectedInfoPointId}
+              onSelectInfoPoint={handleSelectInfoPoint}
             />
           </div>
         </section>
@@ -309,6 +334,14 @@ export function HomePage() {
         open={loginOpen}
         onOpenChange={setLoginOpen}
         onLoginSuccess={(name) => setLoggedInUser(name)}
+      />
+
+      {/* Interactive 3D Floating Info Point Modal Overlay (Health Tips & Hospital Directory) */}
+      <InfoPointModal
+        infoPointId={selectedInfoPointId}
+        onSelectInfoPoint={setSelectedInfoPointId}
+        onFocusStepIn3D={handleSelectTourStep}
+        onOpenBooking={handleOpenBooking}
       />
     </div>
   );

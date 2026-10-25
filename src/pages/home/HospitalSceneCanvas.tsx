@@ -16,6 +16,7 @@ import {
   createExteriorHospitalGroup,
   createInteriorHospitalGroup,
 } from './three-builders';
+import { HospitalAmbientAudioEngine } from './hospital-ambient-audio';
 
 export interface HospitalSceneCanvasProps {
   activeStep: number;
@@ -23,9 +24,12 @@ export interface HospitalSceneCanvasProps {
   followCamTight?: boolean;
   activeFloor?: FloorId;
   isNightMode?: boolean;
+  ambientAudioEnabled?: boolean;
   activeQueueCode?: string;
   selectedHotspotId?: boolean | string | null;
   onSelectHotspot?: (hotspotId: string | null) => void;
+  selectedInfoPointId?: string | null;
+  onSelectInfoPoint?: (infoPointId: string | null) => void;
 }
 
 // Pre-allocated math objects outside render loop (zero GC in tick)
@@ -44,6 +48,7 @@ const _ambPoint = new THREE.Vector3();
 const _ambTangent = new THREE.Vector3();
 const _pointerNdc = new THREE.Vector2();
 const _raycaster = new THREE.Raycaster();
+const _projVec = new THREE.Vector3();
 const _daySkyColor = new THREE.Color(0xf6f2ea);
 const _nightSkyColor = new THREE.Color(0x131926);
 const _dayGroundColor = new THREE.Color(0xf4efe4);
@@ -82,11 +87,15 @@ export function HospitalSceneCanvas({
   followCamTight = false,
   activeFloor = 1,
   isNightMode = false,
+  ambientAudioEnabled = true,
   activeQueueCode = 'A-012',
   selectedHotspotId = null,
   onSelectHotspot,
+  selectedInfoPointId = null,
+  onSelectInfoPoint,
 }: HospitalSceneCanvasProps) {
   const mountRef = React.useRef<HTMLDivElement | null>(null);
+  const ambientAudioRef = React.useRef<HospitalAmbientAudioEngine | null>(null);
   const queueTvRef = React.useRef<{
     mesh: THREE.Mesh;
     maxAnisotropy: number;
@@ -97,8 +106,11 @@ export function HospitalSceneCanvas({
     followCamTight,
     activeFloor,
     isNightMode,
+    ambientAudioEnabled,
     selectedHotspotId,
     onSelectHotspot,
+    selectedInfoPointId,
+    onSelectInfoPoint,
   });
 
   React.useEffect(() => {
@@ -106,15 +118,24 @@ export function HospitalSceneCanvas({
     stateRef.current.followCamTight = followCamTight;
     stateRef.current.activeFloor = activeFloor;
     stateRef.current.isNightMode = isNightMode;
+    stateRef.current.ambientAudioEnabled = ambientAudioEnabled;
     stateRef.current.selectedHotspotId = selectedHotspotId;
     stateRef.current.onSelectHotspot = onSelectHotspot;
+    stateRef.current.selectedInfoPointId = selectedInfoPointId;
+    stateRef.current.onSelectInfoPoint = onSelectInfoPoint;
+    if (ambientAudioEnabled && ambientAudioRef.current) {
+      ambientAudioRef.current.ensureInitialized();
+    }
   }, [
     activeStep,
     followCamTight,
     activeFloor,
     isNightMode,
+    ambientAudioEnabled,
     selectedHotspotId,
     onSelectHotspot,
+    selectedInfoPointId,
+    onSelectInfoPoint,
   ]);
 
   // Dynamically update 3D Pendaftaran Queue TV texture when activeQueueCode changes!
@@ -140,6 +161,17 @@ export function HospitalSceneCanvas({
     if (!container) return;
 
     const isSoftwareGl = detectSoftwareGl();
+    const ambientEngine = new HospitalAmbientAudioEngine();
+    ambientAudioRef.current = ambientEngine;
+
+    const handleUnlockAudio = () => {
+      if (stateRef.current.ambientAudioEnabled) {
+        ambientEngine.ensureInitialized();
+      }
+    };
+    window.addEventListener('pointerdown', handleUnlockAudio, { passive: true });
+    window.addEventListener('wheel', handleUnlockAudio, { passive: true });
+    window.addEventListener('keydown', handleUnlockAudio, { passive: true });
 
     const scene = new THREE.Scene();
     const bgColor = new THREE.Color(0xf6f2ea);
@@ -234,6 +266,8 @@ export function HospitalSceneCanvas({
       roadCurve,
       exteriorPatient,
       entranceWalkCurve,
+      exteriorInteractables,
+      exteriorInfoPoints,
     } = createExteriorHospitalGroup(mats, maxAnisotropy);
     exteriorGroup.position.set(2.0, 0, 0);
     scene.add(exteriorGroup);
@@ -249,6 +283,7 @@ export function HospitalSceneCanvas({
       xrayScanBeam,
       interactables,
       hotspotPins,
+      infoPointGroups,
       staffRigs,
       floor2Group,
       floor3Group,
@@ -266,21 +301,30 @@ export function HospitalSceneCanvas({
       renderer.compile(scene, camera);
     }
 
-    // Subtle pointer parallax + throttled 3D raycasting
+    // Subtle pointer parallax + throttled 3D raycasting for both hotspots & 3D floating info points
     let pointerNormX = 0;
     let pointerNormY = 0;
     let smoothPointerX = 0;
     let smoothPointerY = 0;
     let lastRaycastTime = 0;
     let hoveredHotspotId: string | null = null;
+    let hoveredInfoPointId: string | null = null;
     let smoothInterior = 0;
+
+    const getActiveInteractables = () => {
+      if (smoothInterior < 0.35) return exteriorInteractables;
+      if (smoothInterior < 0.85) {
+        return [...exteriorInteractables, ...interactables];
+      }
+      return interactables;
+    };
 
     const handlePointerMove = (e: PointerEvent) => {
       pointerNormX = (e.clientX / Math.max(1, window.innerWidth) - 0.5) * 2;
       pointerNormY = (e.clientY / Math.max(1, window.innerHeight) - 0.5) * 2;
 
       const now = performance.now();
-      if (now - lastRaycastTime < 65 || smoothInterior < 0.35) return;
+      if (now - lastRaycastTime < 65) return;
       lastRaycastTime = now;
 
       const rect = renderer.domElement.getBoundingClientRect();
@@ -289,15 +333,21 @@ export function HospitalSceneCanvas({
         -((e.clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1;
 
       _raycaster.setFromCamera(_pointerNdc, camera);
-      const hits = _raycaster.intersectObjects(interactables, false);
-      const nextHover =
-        hits.length > 0
-          ? (hits[0].object.userData.hotspotId as string | undefined) ?? null
-          : null;
+      const hits = _raycaster.intersectObjects(getActiveInteractables(), false);
+      const hitObj = hits.length > 0 ? hits[0].object : null;
+      const nextInfoHover =
+        (hitObj?.userData.infoPointId as string | undefined) ?? null;
+      const nextHotspotHover =
+        (hitObj?.userData.hotspotId as string | undefined) ?? null;
 
-      if (nextHover !== hoveredHotspotId) {
-        hoveredHotspotId = nextHover;
-        container.style.cursor = hoveredHotspotId ? 'pointer' : 'default';
+      if (
+        nextInfoHover !== hoveredInfoPointId ||
+        nextHotspotHover !== hoveredHotspotId
+      ) {
+        hoveredInfoPointId = nextInfoHover;
+        hoveredHotspotId = nextHotspotHover;
+        container.style.cursor =
+          hoveredInfoPointId || hoveredHotspotId ? 'pointer' : 'default';
       }
     };
 
@@ -310,7 +360,6 @@ export function HospitalSceneCanvas({
 
     const handlePointerUp = (e: PointerEvent) => {
       if (Math.hypot(e.clientX - downX, e.clientY - downY) > 6) return;
-      if (smoothInterior < 0.35) return;
 
       const rect = renderer.domElement.getBoundingClientRect();
       _pointerNdc.x = ((e.clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1;
@@ -318,10 +367,17 @@ export function HospitalSceneCanvas({
         -((e.clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1;
 
       _raycaster.setFromCamera(_pointerNdc, camera);
-      const hits = _raycaster.intersectObjects(interactables, false);
+      const hits = _raycaster.intersectObjects(getActiveInteractables(), false);
       if (hits.length > 0) {
+        const hitInfoId = hits[0].object.userData.infoPointId as
+          | string
+          | undefined;
+        if (hitInfoId) {
+          stateRef.current.onSelectInfoPoint?.(hitInfoId);
+          return;
+        }
         const hitId = hits[0].object.userData.hotspotId as string | undefined;
-        if (hitId) {
+        if (hitId && smoothInterior >= 0.35) {
           stateRef.current.onSelectHotspot?.(hitId);
         }
       }
@@ -536,6 +592,25 @@ export function HospitalSceneCanvas({
         interp.activeStationStage !== null && walkStrength < 0.28;
       const activeStage = interp.activeStationStage;
 
+      // Update procedural hospital ambient soundscape (fades in as smoothInterior 0 -> 1)
+      const extWalkActive =
+        smoothInterior < 0.85 && smoothedStep > 0.02 && smoothedStep < 0.85
+          ? 0.65
+          : 0;
+      const currentMix = ambientEngine.updateFrame({
+        interiorFactor: smoothInterior,
+        walkStrength: Math.max(walkStrength, extWalkActive),
+        activeStationStage: activeStage,
+        enabled: Boolean(stateRef.current.ambientAudioEnabled),
+        elapsedSeconds: elapsed,
+      });
+      if (container) {
+        container.dataset.ambientMasterGain = String(currentMix.masterGain);
+        container.dataset.ambientChatterGain = String(currentMix.chatterGain);
+        container.dataset.ambientHumGain = String(currentMix.equipmentHumGain);
+        container.dataset.ambientFootstepGain = String(currentMix.footstepGain);
+      }
+
       // Vertical walk bobbing while walking
       const walkBob = Math.abs(Math.sin(elapsed * 10.0)) * 0.045 * walkStrength;
       heroPatient.group.position.set(
@@ -657,7 +732,26 @@ export function HospitalSceneCanvas({
         (isPerformingStationAction ? 0.18 : walkStrength * 0.12);
       followRing.scale.set(ringScale, ringScale, 1);
 
-      // 4B. Room Micro-Animations (X-Ray Laser Sweep & Hotspot Beacons)
+      // 4B. Room Micro-Animations (X-Ray Laser Sweep, Hotspot Beacons & 3D Floating Info Points)
+      if (exteriorGroup.visible) {
+        for (let i = 0; i < exteriorInfoPoints.length; i++) {
+          const infoGrp = exteriorInfoPoints[i];
+          const baseY = (infoGrp.userData.baseY as number) || 3.85;
+          const infoId = infoGrp.userData.infoPointId as string;
+          const isHighlighted =
+            infoId === stateRef.current.selectedInfoPointId ||
+            infoId === hoveredInfoPointId;
+          infoGrp.position.y = baseY + Math.sin(elapsed * 2.6 + i) * 0.11;
+          infoGrp.lookAt(
+            camera.position.x,
+            infoGrp.position.y + exteriorGroup.position.y,
+            camera.position.z
+          );
+          const s = isHighlighted ? 1.24 : 1.0;
+          infoGrp.scale.set(s, s, s);
+        }
+      }
+
       if (interiorGroup.visible) {
         xrayScanBeam.position.y = 1.35 + Math.sin(elapsed * 2.8) * 0.52;
 
@@ -671,6 +765,31 @@ export function HospitalSceneCanvas({
           pin.rotation.y = elapsed * 1.8 + i;
           const s = isSelected ? 1.38 : 1.0;
           pin.scale.set(s, s, s);
+        }
+
+        for (let i = 0; i < infoPointGroups.length; i++) {
+          const infoGrp = infoPointGroups[i];
+          const baseY = (infoGrp.userData.baseY as number) || 3.9;
+          const infoId = infoGrp.userData.infoPointId as string;
+          const isHighlighted =
+            infoId === stateRef.current.selectedInfoPointId ||
+            infoId === hoveredInfoPointId ||
+            infoGrp.userData.stepIndex === stateRef.current.activeStep;
+          infoGrp.position.y =
+            baseY + Math.sin(elapsed * 2.7 + i * 1.1) * 0.11;
+          infoGrp.lookAt(
+            camera.position.x,
+            infoGrp.position.y + interiorGroup.position.y,
+            camera.position.z
+          );
+          const s =
+            infoId === stateRef.current.selectedInfoPointId ||
+            infoId === hoveredInfoPointId
+              ? 1.26
+              : isHighlighted
+                ? 1.08
+                : 0.94;
+          infoGrp.scale.set(s, s, s);
         }
       }
 
@@ -809,6 +928,29 @@ export function HospitalSceneCanvas({
         camera.updateProjectionMatrix();
       }
 
+      // Project the current step's 3D floating info point to screen space for telemetry/accessibility
+      const activeInfoGrp =
+        stateRef.current.activeStep === 0
+          ? exteriorInfoPoints[0]
+          : infoPointGroups.find(
+              (g) => g.userData.stepIndex === stateRef.current.activeStep
+            );
+      if (activeInfoGrp && container) {
+        activeInfoGrp.getWorldPosition(_projVec);
+        _projVec.y += 0.25; // aim right at the badge/orb center
+        _projVec.project(camera);
+        const rect = renderer.domElement.getBoundingClientRect();
+        const sx = Math.round((_projVec.x * 0.5 + 0.5) * rect.width + rect.left);
+        const sy = Math.round(
+          (-_projVec.y * 0.5 + 0.5) * rect.height + rect.top
+        );
+        container.dataset.activeInfoId = String(
+          activeInfoGrp.userData.infoPointId || ''
+        );
+        container.dataset.activeInfoScreenX = String(sx);
+        container.dataset.activeInfoScreenY = String(sy);
+      }
+
       renderer.render(scene, camera);
 
       if (isSoftwareGl) {
@@ -835,10 +977,15 @@ export function HospitalSceneCanvas({
       disposed = true;
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerdown', handleUnlockAudio);
+      window.removeEventListener('wheel', handleUnlockAudio);
+      window.removeEventListener('keydown', handleUnlockAudio);
       container.removeEventListener('pointerdown', handlePointerDown);
       container.removeEventListener('pointerup', handlePointerUp);
       cancelAnimationFrame(frameId);
       clearTimeout(frameId);
+      ambientEngine.dispose();
+      ambientAudioRef.current = null;
       renderer.dispose();
     };
   }, [continuousStepRef]);
@@ -847,6 +994,7 @@ export function HospitalSceneCanvas({
     <div
       ref={mountRef}
       data-testid="hospital-3d-canvas"
+      data-ambient-enabled={ambientAudioEnabled ? 'true' : 'false'}
       className="h-full w-full select-none"
       aria-label="Visualisasi 3D Interaktif Rumah Sakit Nadi"
     />

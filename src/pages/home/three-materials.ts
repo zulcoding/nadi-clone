@@ -193,6 +193,67 @@ export function createVitalsTagTexture(maxAnisotropy = 4): THREE.CanvasTexture {
   return finalizeCanvasTexture(canvas, maxAnisotropy);
 }
 
+export function createFloatingInfoBadgeTexture(
+  label: string,
+  category: 'health-tip' | 'directory',
+  maxAnisotropy = 4
+): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 144;
+  const ctx = canvas.getContext('2d')!;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const isTip = category === 'health-tip';
+  const accentColor = isTip ? '#10B981' : '#E8612C';
+
+  // Pill background
+  ctx.fillStyle = '#18181B';
+  ctx.beginPath();
+  ctx.roundRect(8, 12, 496, 120, 60);
+  ctx.fill();
+
+  // Accent border
+  ctx.strokeStyle = accentColor;
+  ctx.lineWidth = 6;
+  ctx.beginPath();
+  ctx.roundRect(11, 15, 490, 114, 57);
+  ctx.stroke();
+
+  // Left circular icon badge
+  ctx.fillStyle = accentColor;
+  ctx.beginPath();
+  ctx.arc(72, 72, 40, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#FFFFFF';
+  if (isTip) {
+    // Medical cross icon for Health Tip
+    ctx.fillRect(64, 48, 16, 48);
+    ctx.fillRect(48, 64, 48, 16);
+  } else {
+    // 'i' info icon for Directory
+    ctx.beginPath();
+    ctx.arc(72, 50, 7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillRect(65, 64, 14, 34);
+  }
+
+  // Category kicker
+  ctx.fillStyle = isTip ? '#6EE7B7' : '#FDBA74';
+  ctx.font = '800 18px "Plus Jakarta Sans", sans-serif';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(isTip ? 'KLIK · TIPS KESEHATAN' : 'KLIK · DIREKTORI RS', 132, 50);
+
+  // Main label
+  ctx.fillStyle = '#FFFFFF';
+  ctx.font = '800 28px "Plus Jakarta Sans", sans-serif';
+  ctx.fillText(label, 132, 90);
+
+  return finalizeCanvasTexture(canvas, maxAnisotropy);
+}
+
 export interface HospitalMaterialSet {
   creamWall: THREE.MeshStandardMaterial;
   warmFloor: THREE.MeshStandardMaterial;

@@ -9,6 +9,7 @@ import {
   Compass,
   FileText,
   HeartPulse,
+  Info,
   Moon,
   MousePointerClick,
   Pause,
@@ -19,11 +20,14 @@ import {
   Stethoscope,
   Sun,
   Tv,
+  Volume2,
+  VolumeX,
   X,
 } from 'lucide-react';
 import { Button } from '@/src/components/ui/button';
 import { SPECIALTIES, TOUR_STEPS } from './data';
 import {
+  getFloatingInfoPointForStep,
   getFloorConfig,
   getHotspotDetails,
   type FloorId,
@@ -41,10 +45,14 @@ export interface HeroTourOverlayProps {
   onSelectFloor: (floor: FloorId) => void;
   isNightMode: boolean;
   onToggleNightMode: () => void;
+  ambientAudioEnabled?: boolean;
+  onToggleAmbientAudio?: () => void;
   activeQueueCode: string;
   onSimulateQueueCall: (code: string) => void;
   selectedHotspotId: string | null;
   onSelectHotspot: (hotspotId: string | null) => void;
+  selectedInfoPointId?: string | null;
+  onSelectInfoPoint?: (infoPointId: string | null) => void;
 }
 
 export function HeroTourOverlay({
@@ -59,10 +67,14 @@ export function HeroTourOverlay({
   onSelectFloor,
   isNightMode,
   onToggleNightMode,
+  ambientAudioEnabled = true,
+  onToggleAmbientAudio,
   activeQueueCode,
   onSimulateQueueCall,
   selectedHotspotId,
   onSelectHotspot,
+  selectedInfoPointId = null,
+  onSelectInfoPoint,
 }: HeroTourOverlayProps) {
   const [selectedHeroSpecialty, setSelectedHeroSpecialty] =
     React.useState<string>('jantung');
@@ -73,6 +85,7 @@ export function HeroTourOverlay({
   const currentStep = TOUR_STEPS[activeStep] ?? TOUR_STEPS[0];
   const floorConfig = getFloorConfig(activeFloor);
   const activeHotspot = getHotspotDetails(selectedHotspotId);
+  const stepInfoPoint = getFloatingInfoPointForStep(activeStep);
 
   return (
     <div className="pointer-events-none relative z-10 flex h-full w-full flex-col justify-between px-4 pt-20 pb-5 sm:px-10 lg:px-16">
@@ -215,12 +228,42 @@ export function HeroTourOverlay({
             </div>
           </div>
         ) : (
-          activeStep >= 1 && (
-            <div className="flex items-center gap-1.5 rounded-full border border-[#E5DFD3] bg-white/95 px-3 py-1 text-[11px] font-medium text-[#57534E] shadow-sm">
-              <MousePointerClick className="h-3.5 w-3.5 text-[#E8612C]" />
-              <span>Klik pin oranye pada alat medis 3D untuk inspeksi</span>
-            </div>
-          )
+          <div className="flex flex-col items-end gap-1.5">
+            {onSelectInfoPoint && (
+              <button
+                type="button"
+                data-testid="active-3d-info-point-trigger"
+                onClick={() => onSelectInfoPoint(stepInfoPoint.id)}
+                className="group flex items-center gap-2 rounded-full border border-[#E5DFD3] bg-white/95 px-3.5 py-1.5 text-left text-[11px] font-bold text-[#18181B] shadow-[0_8px_24px_rgb(24,24,27,0.08)] hover:border-[#E8612C] transition-all cursor-pointer"
+              >
+                <span
+                  className={`flex h-5 w-5 items-center justify-center rounded-full text-white ${
+                    stepInfoPoint.category === 'health-tip'
+                      ? 'bg-[#10B981]'
+                      : 'bg-[#E8612C]'
+                  }`}
+                >
+                  <Info className="h-3 w-3" />
+                </span>
+                <span>
+                  <span className="text-[#78716C] font-semibold">
+                    Titik Info 3D:{' '}
+                  </span>
+                  <span className="group-hover:text-[#E8612C] transition-colors">
+                    {stepInfoPoint.shortBadgeLabel}
+                  </span>
+                </span>
+              </button>
+            )}
+            {activeStep >= 1 && (
+              <div className="flex items-center gap-1.5 rounded-full border border-[#E5DFD3] bg-white/95 px-3 py-1 text-[11px] font-medium text-[#57534E] shadow-sm">
+                <MousePointerClick className="h-3.5 w-3.5 text-[#E8612C]" />
+                <span>
+                  Klik pin 3D atau lencana info melayang untuk detail
+                </span>
+              </div>
+            )}
+          </div>
         )}
       </div>
 
@@ -778,6 +821,54 @@ export function HeroTourOverlay({
               </>
             )}
           </button>
+
+          {/* Subtle Hospital Ambient Sound Loop Toggle */}
+          {onToggleAmbientAudio && (
+            <button
+              type="button"
+              onClick={onToggleAmbientAudio}
+              data-testid="toggle-ambient-audio"
+              title="Suara ambien rumah sakit (langkah kaki lembut, suasana lobi, dengung halus alat medis)"
+              className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-semibold shadow-sm transition-colors cursor-pointer ${
+                ambientAudioEnabled
+                  ? 'border-[#10B981]/50 bg-[#ECFDF5] text-[#065F46]'
+                  : 'border-[#E5DFD3] bg-[#FAF8F4]/95 text-[#78716C] hover:text-[#18181B]'
+              }`}
+            >
+              {ambientAudioEnabled ? (
+                <>
+                  <Volume2 className="h-3 w-3 text-[#10B981]" />
+                  <span>
+                    {activeStep >= 1
+                      ? 'Ambien RS: Indoor Aktif'
+                      : 'Ambien RS: Aktif'}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <VolumeX className="h-3 w-3 text-[#78716C]" />
+                  <span>Ambien RS: Bisu</span>
+                </>
+              )}
+            </button>
+          )}
+
+          {/* Quick 3D Floating Info Points Modal Trigger (Health Tips & Hospital Directory) */}
+          {onSelectInfoPoint && (
+            <button
+              type="button"
+              data-testid="open-info-points-modal-btn"
+              onClick={() => onSelectInfoPoint(stepInfoPoint.id)}
+              className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-semibold shadow-sm transition-colors cursor-pointer ${
+                selectedInfoPointId
+                  ? 'border-[#10B981] bg-[#ECFDF5] text-[#065F46]'
+                  : 'border-[#E5DFD3] bg-[#FAF8F4]/95 text-[#18181B] hover:border-[#E8612C] hover:text-[#E8612C]'
+              }`}
+            >
+              <Info className="h-3 w-3 text-[#10B981]" />
+              <span>Info & Tips Kesehatan 3D</span>
+            </button>
+          )}
 
           {/* Quick 3D Hotspot Inspector Cycle Button */}
           {activeStep >= 1 && (
