@@ -176,6 +176,55 @@ export function validatePatientForm(form: PatientFormData): ValidationResult {
   };
 }
 
+export interface AppointmentBookingInput {
+  doctorId: string;
+  dateNum: string;
+  timeSlot: string;
+  patient: PatientFormData;
+}
+
+export interface AppointmentBookingValidationResult {
+  valid: boolean;
+  doctorError?: string;
+  slotError?: string;
+  patientErrors: Partial<Record<keyof PatientFormData, string>>;
+}
+
+export function validateAppointmentBooking(
+  input: AppointmentBookingInput,
+  doctors: DoctorItem[] = DOCTORS
+): AppointmentBookingValidationResult {
+  let doctorError: string | undefined;
+  let slotError: string | undefined;
+
+  const selectedDoc = doctors.find((d) => d.id === input.doctorId);
+  if (!selectedDoc) {
+    doctorError = 'Silakan pilih dokter spesialis terlebih dahulu.';
+  } else {
+    if (!input.dateNum) {
+      slotError = 'Pilih tanggal kunjungan yang tersedia.';
+    } else if (!input.timeSlot) {
+      slotError = 'Pilih jam praktik dokter yang tersedia.';
+    } else {
+      const matchingSlot = selectedDoc.timeSlots.find(
+        (s) => s.time === input.timeSlot
+      );
+      if (!matchingSlot || !matchingSlot.available) {
+        slotError = 'Jam praktik yang dipilih tidak tersedia. Pilih jam lain.';
+      }
+    }
+  }
+
+  const patientValidation = validatePatientForm(input.patient);
+
+  return {
+    valid: !doctorError && !slotError && patientValidation.valid,
+    doctorError,
+    slotError,
+    patientErrors: patientValidation.errors,
+  };
+}
+
 export function calculateAppointmentTotal(
   doctorPrice: number,
   paymentMethodType: 'umum' | 'asuransi' | 'bpjs'
@@ -226,6 +275,9 @@ export function interpolateTourCameraState(continuousStep: number): {
   cameraPos: [number, number, number];
   cameraTarget: [number, number, number];
   patientPathProgress: number;
+  exteriorWalkProgress: number;
+  activeStationStage: number | null;
+  stationActionFactor: number;
   interiorFactor: number;
 } {
   const maxIdx = TOUR_STEPS.length - 1;
@@ -233,16 +285,26 @@ export function interpolateTourCameraState(continuousStep: number): {
   const idx0 = Math.floor(clamped);
   const idx1 = Math.min(maxIdx, idx0 + 1);
   const rawFrac = clamped - idx0;
+
   // Blend linear and smoothstep for a natural cinematic glide across waypoints
   const frac = 0.35 * rawFrac + 0.65 * smoothstep01(rawFrac);
 
   const s0 = TOUR_STEPS[idx0];
   const s1 = TOUR_STEPS[idx1];
 
+  // When transitioning between interior rooms (idx0 >= 1), pull camera slightly
+  // higher/wider in the middle of the corridor walk, then zoom in NEAR at the station!
+  const midWalkArc =
+    idx0 >= 1 && idx1 > idx0 ? Math.sin(rawFrac * Math.PI) : 0;
+
   const cameraPos: [number, number, number] = [
     s0.cameraPos[0] + (s1.cameraPos[0] - s0.cameraPos[0]) * frac,
-    s0.cameraPos[1] + (s1.cameraPos[1] - s0.cameraPos[1]) * frac,
-    s0.cameraPos[2] + (s1.cameraPos[2] - s0.cameraPos[2]) * frac,
+    s0.cameraPos[1] +
+      (s1.cameraPos[1] - s0.cameraPos[1]) * frac +
+      midWalkArc * 1.65,
+    s0.cameraPos[2] +
+      (s1.cameraPos[2] - s0.cameraPos[2]) * frac +
+      midWalkArc * 2.1,
   ];
 
   const cameraTarget: [number, number, number] = [
@@ -251,16 +313,46 @@ export function interpolateTourCameraState(continuousStep: number): {
     s0.cameraTarget[2] + (s1.cameraTarget[2] - s0.cameraTarget[2]) * frac,
   ];
 
+  // Compute patient path progress with station dwell plateaus:
+  // - From Step 0 (Gedung) to Step 1 (Pendaftaran): patient walks immediately from 0.0 to 0.84,
+  //   then dwells at Pendaftaran (0.84..1.0) performing check-in.
+  // - Between interior rooms (Step 1->2, 2->3, 3->4, 4->5): patient dwells at current station
+  //   for 0.0..0.18, walks through the open corridor during 0.18..0.82, and arrives/dwells at
+  //   the next station for 0.82..1.0!
+  let walkAlpha: number;
+  if (idx0 === 0) {
+    walkAlpha = smoothstep01(rawFrac / 0.84);
+  } else {
+    walkAlpha = smoothstep01((rawFrac - 0.18) / 0.64);
+  }
+
   const patientPathProgress =
     s0.patientPathProgress +
-    (s1.patientPathProgress - s0.patientPathProgress) * rawFrac;
+    (s1.patientPathProgress - s0.patientPathProgress) * walkAlpha;
 
-  const interiorFactor = smoothstep01((clamped - 0.06) / 0.78);
+  // Exterior patient walks from the front walkway right into the main hospital entrance doors
+  // as continuousStep moves from 0.0 (Gedung) toward 0.55 (entering Pendaftaran)
+  const exteriorWalkProgress = smoothstep01(clamped / 0.52);
+
+  // Determine if the patient is currently at a station performing an interactive action
+  const nearestStep = Math.round(clamped);
+  const distToNearest = Math.abs(clamped - nearestStep);
+  const stationActionFactor =
+    nearestStep >= 1 ? 1 - smoothstep01(distToNearest / 0.24) : 0;
+  const activeStationStage =
+    nearestStep >= 1 && stationActionFactor > 0.15 ? nearestStep : null;
+
+  // Delay cutaway lift slightly (starts at 0.26) so the user clearly sees the exterior patient
+  // walking toward the hospital entrance doors while the camera zooms in from far to near!
+  const interiorFactor = smoothstep01((clamped - 0.22) / 0.58);
 
   return {
     cameraPos,
     cameraTarget,
     patientPathProgress,
+    exteriorWalkProgress,
+    activeStationStage,
+    stationActionFactor,
     interiorFactor,
   };
 }

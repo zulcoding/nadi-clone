@@ -12,6 +12,7 @@ import { HeroTourOverlay } from './HeroTourOverlay';
 import { AmbulanceSection } from './AmbulanceSection';
 import { ServicesSection } from './ServicesSection';
 import { DoctorsSection } from './DoctorsSection';
+import { AppointmentBooking } from './AppointmentBooking';
 import { AppShowcaseSection } from './AppShowcaseSection';
 import { McuPackagesSection } from './McuPackagesSection';
 import { TestimonialsSection } from './TestimonialsSection';
@@ -80,36 +81,50 @@ export function HomePage() {
     return () => window.removeEventListener('scroll', handleScroll);
   }, [autoTourActive]);
 
-  // Continuous Auto-Tour 3D Camera Flight Loop
+  // Continuous Auto-Tour 3D Camera Flight Loop with Stage Dwell Pause
   React.useEffect(() => {
     if (!autoTourActive) return;
     let rafId = 0;
     let lastTime = performance.now();
+    let dwellRemaining = 1.4; // Pause at each station so the patient performs the stage action
 
     const advanceAutoTour = (now: number) => {
       const dt = Math.min((now - lastTime) / 1000, 0.12);
       lastTime = now;
 
       const maxStep = TOUR_STEPS.length - 1;
-      let nextStep = continuousStepRef.current + dt * 0.65;
-      if (nextStep > maxStep) {
-        nextStep = 0;
-      }
-      continuousStepRef.current = nextStep;
+      const current = continuousStepRef.current;
 
-      const rounded = Math.round(nextStep);
-      setActiveStep((prev) => (prev === rounded ? prev : rounded));
+      if (dwellRemaining > 0) {
+        dwellRemaining -= dt;
+      } else {
+        const nextInteger = Math.floor(current) + 1;
+        let nextStep = current + dt * 0.62;
 
-      const track = tourTrackRef.current;
-      if (track) {
-        const scrollableDistance = Math.max(
-          1,
-          track.offsetHeight - window.innerHeight
-        );
-        const targetScrollY =
-          track.offsetTop + (nextStep / maxStep) * scrollableDistance;
-        programmaticScrollUntilRef.current = performance.now() + 120;
-        window.scrollTo({ top: targetScrollY, behavior: 'auto' });
+        // If we crossed or reached the next station integer, snap to it and dwell for 1.8s!
+        if (nextStep >= nextInteger && current < nextInteger) {
+          nextStep = nextInteger > maxStep ? 0 : nextInteger;
+          dwellRemaining = 1.8;
+        } else if (nextStep > maxStep) {
+          nextStep = 0;
+          dwellRemaining = 1.6;
+        }
+
+        continuousStepRef.current = nextStep;
+        const rounded = Math.round(nextStep);
+        setActiveStep((prev) => (prev === rounded ? prev : rounded));
+
+        const track = tourTrackRef.current;
+        if (track) {
+          const scrollableDistance = Math.max(
+            1,
+            track.offsetHeight - window.innerHeight
+          );
+          const targetScrollY =
+            track.offsetTop + (nextStep / maxStep) * scrollableDistance;
+          programmaticScrollUntilRef.current = performance.now() + 120;
+          window.scrollTo({ top: targetScrollY, behavior: 'auto' });
+        }
       }
 
       rafId = requestAnimationFrame(advanceAutoTour);
@@ -261,6 +276,14 @@ export function HomePage() {
           <DoctorsSection
             onSelectDoctorForBooking={handleSelectDoctorForBooking}
             onOpenBooking={handleOpenBooking}
+          />
+          <AppointmentBooking
+            preselectedDoctor={bookingDoctor}
+            onBookingConfirmed={(ticket) => {
+              setConfirmedTicket(ticket);
+              setActiveQueueCode(ticket.queueCode);
+            }}
+            onSimulate3DCheckIn={handleSimulate3DCheckIn}
           />
           <AppShowcaseSection onOpenBooking={() => handleOpenBooking()} />
           <McuPackagesSection onSelectMcuPackage={handleSelectMcuPackage} />

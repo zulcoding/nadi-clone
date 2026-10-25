@@ -67,13 +67,25 @@ test('scrollProgressToTourStep maps 0..1 progress to 6 hospital tour waypoints a
   assert.equal(end.interiorFactor, 1);
 });
 
-test('interpolateTourCameraState smoothly interpolates camera and patient path between steps', () => {
+test('interpolateTourCameraState smoothly interpolates camera, exterior walk, and station dwell actions', () => {
+  // At Step 0.25 (transitioning Gedung -> Pendaftaran), exterior patient is walking into building
+  const entering = interpolateTourCameraState(0.25);
+  assert.ok(entering.exteriorWalkProgress > 0.2);
+  assert.ok(entering.exteriorWalkProgress < 0.9);
+  assert.ok(entering.cameraPos[2] < TOUR_STEPS[0].cameraPos[2]);
+
+  // At exact Step 1.0 (Pendaftaran), patient is dwelling at Stage 1 performing check-in action
+  const atPendaftaran = interpolateTourCameraState(1.0);
+  assert.equal(atPendaftaran.activeStationStage, 1);
+  assert.equal(atPendaftaran.stationActionFactor, 1);
+
+  // At Step 1.5 (mid-corridor walk between Pendaftaran and Poliklinik)
   const mid12 = interpolateTourCameraState(1.5);
-  // Between step 1 (Pendaftaran) and step 2 (Poliklinik)
   assert.ok(mid12.cameraPos[0] > TOUR_STEPS[1].cameraPos[0]);
   assert.ok(mid12.cameraPos[0] < TOUR_STEPS[2].cameraPos[0]);
   assert.ok(mid12.patientPathProgress > TOUR_STEPS[1].patientPathProgress);
   assert.ok(mid12.patientPathProgress < TOUR_STEPS[2].patientPathProgress);
+  assert.equal(mid12.activeStationStage, null);
   assert.equal(mid12.interiorFactor, 1);
 });
 
@@ -100,4 +112,44 @@ test('getHotspotDetails returns 3D station metadata for valid hotspot IDs and nu
 
   assert.equal(getHotspotDetails('unknown-id'), null);
   assert.equal(getHotspotDetails(null), null);
+});
+
+test('validateAppointmentBooking validates doctor selection, available time slot, and patient fields', async () => {
+  const { validateAppointmentBooking } = await import('./booking-logic');
+
+  const validBooking = validateAppointmentBooking({
+    doctorId: 'dr-raka',
+    dateNum: '28',
+    timeSlot: '10:00',
+    patient: SAMPLE_PATIENT_DATA,
+  });
+  assert.equal(validBooking.valid, true);
+  assert.equal(validBooking.doctorError, undefined);
+  assert.equal(validBooking.slotError, undefined);
+
+  // Unavailable slot for dr-raka (08:30 is unavailable)
+  const unavailableSlotBooking = validateAppointmentBooking({
+    doctorId: 'dr-raka',
+    dateNum: '28',
+    timeSlot: '08:30',
+    patient: SAMPLE_PATIENT_DATA,
+  });
+  assert.equal(unavailableSlotBooking.valid, false);
+  assert.ok(unavailableSlotBooking.slotError);
+
+  // Empty timeSlot & invalid patient
+  const missingSlotAndPatient = validateAppointmentBooking({
+    doctorId: 'dr-raka',
+    dateNum: '28',
+    timeSlot: '',
+    patient: {
+      ...SAMPLE_PATIENT_DATA,
+      fullName: '',
+      nik: '123',
+    },
+  });
+  assert.equal(missingSlotAndPatient.valid, false);
+  assert.ok(missingSlotAndPatient.slotError);
+  assert.ok(missingSlotAndPatient.patientErrors.fullName);
+  assert.ok(missingSlotAndPatient.patientErrors.nik);
 });

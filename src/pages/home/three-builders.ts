@@ -262,6 +262,8 @@ export function createExteriorHospitalGroup(
   ambulance: THREE.Group;
   sirenBarMat: THREE.MeshStandardMaterial;
   roadCurve: THREE.CatmullRomCurve3;
+  exteriorPatient: CharacterRig;
+  entranceWalkCurve: THREE.CatmullRomCurve3;
 } {
   const exteriorGroup = new THREE.Group();
 
@@ -469,18 +471,47 @@ export function createExteriorHospitalGroup(
     exteriorGroup.add(t);
   });
 
-  // Exterior pedestrians near entrance
-  const ped1 = createCharacterMesh(mats, { shirtColor: 0xe8612c });
-  ped1.group.position.set(-2.4, 0.04, 4.3);
-  ped1.group.rotation.y = 0.6;
-  exteriorGroup.add(ped1.group);
+  // Entrance Walkway Path from sidewalk into the Hospital Main Doors
+  const entranceWalkCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(-3.2, 0.04, 6.4),
+    new THREE.Vector3(-2.3, 0.04, 4.9),
+    new THREE.Vector3(-1.6, 0.04, 3.6),
+    new THREE.Vector3(-1.6, 0.04, 2.2),
+  ]);
+  const entranceWalkGeo = new THREE.TubeGeometry(
+    entranceWalkCurve,
+    24,
+    0.09,
+    8,
+    false
+  );
+  entranceWalkGeo.scale(1, 0.25, 1);
+  const entranceWalkRibbon = new THREE.Mesh(entranceWalkGeo, mats.pathOrange);
+  exteriorGroup.add(entranceWalkRibbon);
+
+  // Exterior Hero Patient who walks into the hospital entrance when transitioning Gedung -> Pendaftaran
+  const exteriorPatient = createCharacterMesh(mats, {
+    shirtColor: 0xe8612c,
+    pantsColor: 0x18181b,
+  });
+  const extStart = entranceWalkCurve.getPointAt(0);
+  exteriorPatient.group.position.set(extStart.x, 0.04, extStart.z);
+  exteriorPatient.group.rotation.y = Math.PI;
+  exteriorGroup.add(exteriorPatient.group);
 
   const ped2 = createCharacterMesh(mats, { shirtColor: 0x10b981 });
   ped2.group.position.set(1.2, 0.04, 5.1);
   ped2.group.rotation.y = -0.8;
   exteriorGroup.add(ped2.group);
 
-  return { exteriorGroup, ambulance, sirenBarMat, roadCurve };
+  return {
+    exteriorGroup,
+    ambulance,
+    sirenBarMat,
+    roadCurve,
+    exteriorPatient,
+    entranceWalkCurve,
+  };
 }
 
 function createHotspotPin(
@@ -507,17 +538,21 @@ export function createInteriorHospitalGroup(
 ): {
   interiorGroup: THREE.Group;
   patientPathCurve: THREE.CatmullRomCurve3;
+  stationU: [number, number, number, number, number, number];
   heroPatient: CharacterRig;
+  patientHeldItem: THREE.Mesh;
   followRing: THREE.Mesh;
   queueTvMesh: THREE.Mesh;
   xrayScanBeam: THREE.Mesh;
   interactables: THREE.Object3D[];
   hotspotPins: THREE.Mesh[];
   staffRigs: {
+    receptionist: CharacterRig;
     nurse: CharacterRig;
     doctor: CharacterRig;
     pharmacist: CharacterRig;
     labTech: CharacterRig;
+    cashier: CharacterRig;
   };
   floor2Group: THREE.Group;
   floor3Group: THREE.Group;
@@ -579,52 +614,84 @@ export function createInteriorHospitalGroup(
   rightWallTopTrim.position.set(18.2, 3.65, 0.5);
   interiorGroup.add(rightWallTopTrim);
 
-  // Room Divider Walls
+  // Shortened Room Divider Walls (z = -7.8 to z = -2.2, leaving z > -2.2 as an open front corridor!)
   const divWall1 = new THREE.Mesh(
-    new THREE.BoxGeometry(0.35, 3.5, 9.2),
+    new THREE.BoxGeometry(0.35, 3.5, 5.6),
     mats.creamWall
   );
-  divWall1.position.set(-0.8, 1.75, -3.2);
+  divWall1.position.set(-0.8, 1.75, -5.0);
   divWall1.castShadow = true;
   divWall1.receiveShadow = true;
   interiorGroup.add(divWall1);
 
   const divWall2 = new THREE.Mesh(
-    new THREE.BoxGeometry(0.35, 3.5, 9.2),
+    new THREE.BoxGeometry(0.35, 3.5, 5.6),
     mats.creamWall
   );
-  divWall2.position.set(5.6, 1.75, -3.2);
+  divWall2.position.set(5.6, 1.75, -5.0);
   divWall2.castShadow = true;
   divWall2.receiveShadow = true;
   interiorGroup.add(divWall2);
 
   const divWall3 = new THREE.Mesh(
-    new THREE.BoxGeometry(0.35, 3.5, 8.2),
+    new THREE.BoxGeometry(0.35, 3.5, 5.2),
     mats.creamWall
   );
-  divWall3.position.set(11.6, 1.75, -3.7);
+  divWall3.position.set(11.6, 1.75, -5.2);
   divWall3.castShadow = true;
   divWall3.receiveShadow = true;
   interiorGroup.add(divWall3);
 
   // =========================================================
-  // CONTINUOUS ORANGE FLOOR GUIDE LINE (Pendaftaran -> Kasir)
+  // COLLISION-FREE ORANGE FLOOR GUIDE LINE (Pendaftaran -> Kasir)
   // =========================================================
   const patientPathCurve = new THREE.CatmullRomCurve3([
-    new THREE.Vector3(-6.2, 0.04, 4.2),
-    new THREE.Vector3(-5.0, 0.04, -1.6), // Step 1: Pendaftaran
-    new THREE.Vector3(-2.0, 0.04, 2.2),
-    new THREE.Vector3(1.6, 0.04, -1.5), // Step 2: Poliklinik
-    new THREE.Vector3(4.5, 0.04, 2.2),
-    new THREE.Vector3(8.5, 0.04, -1.4), // Step 3: Lab & Radiologi
-    new THREE.Vector3(9.5, 0.04, 3.6),
-    new THREE.Vector3(12.2, 0.04, 4.2), // Step 4: Farmasi
-    new THREE.Vector3(14.8, 0.04, 5.2), // Step 5: Kasir
+    new THREE.Vector3(-6.5, 0.04, 4.8), // Step 0: Entrance threshold
+    new THREE.Vector3(-5.2, 0.04, -2.6), // Step 1: Pendaftaran Desk
+    new THREE.Vector3(-3.4, 0.04, 2.3), // Corridor exit from Pendaftaran
+    new THREE.Vector3(-0.2, 0.04, 2.3), // Open corridor crossing divWall1 (z = +2.3 vs wall z = -2.2)
+    new THREE.Vector3(1.6, 0.04, -1.6), // Step 2: Poliklinik Triage & Doctor
+    new THREE.Vector3(3.6, 0.04, 2.3), // Corridor exit from Poliklinik
+    new THREE.Vector3(6.4, 0.04, 2.3), // Open corridor crossing divWall2 (z = +2.3 vs wall z = -2.2)
+    new THREE.Vector3(9.2, 0.04, -4.2), // Step 3: Lab & Radiologi X-Ray
+    new THREE.Vector3(10.0, 0.04, 3.5), // Open corridor exit to Farmasi
+    new THREE.Vector3(12.4, 0.04, 3.6), // Step 4: Farmasi Counter
+    new THREE.Vector3(15.8, 0.04, 4.1), // Step 5: Kasir Counter
   ]);
+
+  // Precompute exact arc-length parameter u (0..1) for each of the 6 stages so the patient stops
+  // on the exact millimeter of every station!
+  const stationCoords: [number, number][] = [
+    [-6.5, 4.8],
+    [-5.2, -2.6],
+    [1.6, -1.6],
+    [9.2, -4.2],
+    [12.4, 3.6],
+    [15.8, 4.1],
+  ];
+  const samplePt = new THREE.Vector3();
+  const stationU: [number, number, number, number, number, number] = [
+    0, 0.15, 0.42, 0.7, 0.88, 1,
+  ];
+  for (let sIdx = 1; sIdx <= 4; sIdx++) {
+    const [tx, tz] = stationCoords[sIdx];
+    let bestU = stationU[sIdx];
+    let bestDistSq = Infinity;
+    for (let k = 0; k <= 400; k++) {
+      const u = k / 400;
+      patientPathCurve.getPointAt(u, samplePt);
+      const dSq = (samplePt.x - tx) ** 2 + (samplePt.z - tz) ** 2;
+      if (dSq < bestDistSq) {
+        bestDistSq = dSq;
+        bestU = u;
+      }
+    }
+    stationU[sIdx] = bestU;
+  }
 
   const pathTubeGeo = new THREE.TubeGeometry(
     patientPathCurve,
-    96,
+    120,
     0.11,
     8,
     false
@@ -632,6 +699,22 @@ export function createInteriorHospitalGroup(
   pathTubeGeo.scale(1, 0.25, 1);
   const pathRibbon = new THREE.Mesh(pathTubeGeo, mats.pathOrange);
   interiorGroup.add(pathRibbon);
+
+  // Station Floor Marker Discs at each of the 5 stations
+  for (let sIdx = 1; sIdx <= 5; sIdx++) {
+    const [sx, sz] = stationCoords[sIdx];
+    const pad = new THREE.Mesh(
+      new THREE.CircleGeometry(0.46, 24),
+      new THREE.MeshBasicMaterial({
+        color: 0xe8612c,
+        transparent: true,
+        opacity: 0.22,
+      })
+    );
+    pad.rotation.x = -Math.PI / 2;
+    pad.position.set(sx, 0.025, sz);
+    interiorGroup.add(pad);
+  }
 
   // =========================================================
   // ZONE 1: PENDAFTARAN (x: -8.5 to -1.0, z: -7.5 to 3.5)
@@ -672,6 +755,7 @@ export function createInteriorHospitalGroup(
   interiorGroup.add(receptionFrontPanel);
 
   // 2 Staff & Monitors behind Reception
+  const receptionStaffList: CharacterRig[] = [];
   [-6.2, -4.2].forEach((sx) => {
     const staff = createCharacterMesh(mats, {
       shirtColor: 0x2563eb,
@@ -679,6 +763,7 @@ export function createInteriorHospitalGroup(
     });
     staff.group.position.set(sx, 0, -5.4);
     interiorGroup.add(staff.group);
+    receptionStaffList.push(staff);
 
     const monitor = new THREE.Mesh(
       new THREE.BoxGeometry(0.62, 0.42, 0.08),
@@ -695,19 +780,19 @@ export function createInteriorHospitalGroup(
       map: createQueueScreenTexture('A-012', '2', maxAnisotropy),
     })
   );
-  queueTvMesh.position.set(-1.1, 2.25, -4.2);
+  queueTvMesh.position.set(-1.1, 2.25, -4.4);
   queueTvMesh.rotation.y = -Math.PI / 2;
   queueTvMesh.userData.hotspotId = 'pendaftaran-tv';
   interiorGroup.add(queueTvMesh);
   interactables.push(queueTvMesh);
 
-  const pinPendaftaran = createHotspotPin(-1.1, 3.1, -4.2, 'pendaftaran-tv');
+  const pinPendaftaran = createHotspotPin(-1.1, 3.1, -4.4, 'pendaftaran-tv');
   interiorGroup.add(pinPendaftaran);
   interactables.push(pinPendaftaran);
   hotspotPins.push(pinPendaftaran);
 
-  // Waiting Chairs in Pendaftaran
-  [-6.2, -5.0, -3.8].forEach((cx, idx) => {
+  // Waiting Chairs in Pendaftaran (placed neatly to the left so the corridor is clear)
+  [-7.6, -6.4].forEach((cx, idx) => {
     const chair = new THREE.Mesh(
       new THREE.BoxGeometry(0.72, 0.48, 0.72),
       idx === 1 ? mats.terracotta : mats.peachBorder
@@ -723,9 +808,9 @@ export function createInteriorHospitalGroup(
     backrest.position.set(cx, 0.62, 1.48);
     interiorGroup.add(backrest);
 
-    if (idx !== 1) {
+    if (idx === 0) {
       const waitingPerson = createCharacterMesh(mats, {
-        shirtColor: idx === 0 ? 0x64748b : 0x0f766e,
+        shirtColor: 0x0f766e,
         seated: true,
       });
       waitingPerson.group.position.set(cx, 0.15, 1.15);
@@ -784,10 +869,10 @@ export function createInteriorHospitalGroup(
   interactables.push(pinPoliklinik);
   hotspotPins.push(pinPoliklinik);
 
-  // Nurse in teal scrubs
+  // Nurse in teal scrubs facing the patient at (1.6, -1.6)
   const nurse = createCharacterMesh(mats, { shirtColor: 0x0d9488 });
-  nurse.group.position.set(0.95, 0, -1.8);
-  nurse.group.rotation.y = -Math.PI / 3;
+  nurse.group.position.set(0.65, 0, -2.35);
+  nurse.group.rotation.y = Math.PI * 0.25;
   interiorGroup.add(nurse.group);
 
   // Doctor Consultation Desk & Exam Bed
@@ -813,7 +898,7 @@ export function createInteriorHospitalGroup(
     new THREE.BoxGeometry(1.1, 0.65, 2.2),
     mats.whiteCoat
   );
-  examBed.position.set(4.6, 0.33, -2.2);
+  examBed.position.set(4.5, 0.33, -2.8);
   examBed.castShadow = true;
   interiorGroup.add(examBed);
 
@@ -821,7 +906,7 @@ export function createInteriorHospitalGroup(
     new THREE.BoxGeometry(1.12, 0.14, 1.1),
     mats.terracotta
   );
-  bedBlanket.position.set(4.6, 0.68, -1.75);
+  bedBlanket.position.set(4.5, 0.68, -2.35);
   interiorGroup.add(bedBlanket);
 
   // =========================================================
@@ -861,25 +946,25 @@ export function createInteriorHospitalGroup(
 
   // Lab Counter & Equipment
   const labBench = new THREE.Mesh(
-    new THREE.BoxGeometry(2.6, 0.9, 0.95),
+    new THREE.BoxGeometry(2.4, 0.9, 0.95),
     mats.whiteCoat
   );
-  labBench.position.set(7.5, 0.45, -5.2);
+  labBench.position.set(7.3, 0.45, -5.4);
   labBench.castShadow = true;
   labBench.userData.hotspotId = 'radiologi-xray';
   interiorGroup.add(labBench);
   interactables.push(labBench);
 
   const labTech = createCharacterMesh(mats, { shirtColor: 0xfaf8f5 });
-  labTech.group.position.set(7.5, 0, -6.1);
+  labTech.group.position.set(7.3, 0, -6.2);
   interiorGroup.add(labTech.group);
 
-  // Radiology Chest X-Ray Stand
+  // Radiology Chest X-Ray Stand positioned at (9.6, -5.6) right in front of Stage 3 waypoint (9.2, -4.2)
   const xrayBoard = new THREE.Mesh(
     new THREE.BoxGeometry(1.15, 1.45, 0.16),
     mats.darkCharcoal
   );
-  xrayBoard.position.set(10.2, 1.35, -5.8);
+  xrayBoard.position.set(9.6, 1.35, -5.6);
   xrayBoard.userData.hotspotId = 'radiologi-xray';
   interiorGroup.add(xrayBoard);
   interactables.push(xrayBoard);
@@ -891,10 +976,10 @@ export function createInteriorHospitalGroup(
       color: 0x10b981,
     })
   );
-  xrayScanBeam.position.set(10.2, 1.35, -5.75);
+  xrayScanBeam.position.set(9.6, 1.35, -5.54);
   interiorGroup.add(xrayScanBeam);
 
-  const pinRadiologi = createHotspotPin(10.2, 2.55, -5.8, 'radiologi-xray');
+  const pinRadiologi = createHotspotPin(9.6, 2.55, -5.6, 'radiologi-xray');
   interiorGroup.add(pinRadiologi);
   interactables.push(pinRadiologi);
   hotspotPins.push(pinRadiologi);
@@ -903,29 +988,24 @@ export function createInteriorHospitalGroup(
     new THREE.BoxGeometry(0.22, 2.4, 0.22),
     mats.metalChrome
   );
-  xrayPillar.position.set(10.2, 1.2, -6.0);
+  xrayPillar.position.set(9.6, 1.2, -5.8);
   interiorGroup.add(xrayPillar);
-
-  const xrayPatient = createCharacterMesh(mats, { shirtColor: 0xe8612c });
-  xrayPatient.group.position.set(10.2, 0, -5.2);
-  xrayPatient.group.rotation.y = Math.PI;
-  interiorGroup.add(xrayPatient.group);
 
   // =========================================================
   // ZONE 4 & 5: FARMASI & KASIR (x: 11.8 to 17.5, z: -2.0 to 7.0)
   // =========================================================
-  // Medicine Shelving Back Wall (Colorful Pill Boxes)
+  // Medicine Shelving Back Wall (placed at z = -1.6 so the corridor is 100% unobstructed)
   const shelfCabinet = new THREE.Mesh(
     new THREE.BoxGeometry(3.8, 2.8, 0.55),
     mats.whiteCoat
   );
-  shelfCabinet.position.set(12.2, 1.4, 0.2);
+  shelfCabinet.position.set(13.2, 1.4, -1.6);
   shelfCabinet.castShadow = true;
   shelfCabinet.userData.hotspotId = 'farmasi-shelf';
   interiorGroup.add(shelfCabinet);
   interactables.push(shelfCabinet);
 
-  const pinFarmasi = createHotspotPin(12.2, 3.15, 0.2, 'farmasi-shelf');
+  const pinFarmasi = createHotspotPin(13.2, 3.15, -1.6, 'farmasi-shelf');
   interiorGroup.add(pinFarmasi);
   interactables.push(pinFarmasi);
   hotspotPins.push(pinFarmasi);
@@ -941,27 +1021,27 @@ export function createInteriorHospitalGroup(
         new THREE.BoxGeometry(0.36, 0.34, 0.26),
         boxMat
       );
-      medBox.position.set(10.7 + col * 0.48, 0.65 + row * 0.55, 0.45);
+      medBox.position.set(11.7 + col * 0.48, 0.65 + row * 0.55, -1.32);
       interiorGroup.add(medBox);
     }
   }
 
-  // Farmasi Counter
+  // Farmasi Counter at (12.4, 2.0) facing patient at (12.4, 3.6)
   const farmasiCounter = new THREE.Mesh(
-    new THREE.BoxGeometry(3.4, 1.0, 1.05),
+    new THREE.BoxGeometry(3.2, 1.0, 1.0),
     mats.creamWall
   );
-  farmasiCounter.position.set(12.0, 0.5, 2.6);
+  farmasiCounter.position.set(12.4, 0.5, 2.0);
   farmasiCounter.castShadow = true;
   farmasiCounter.userData.hotspotId = 'farmasi-shelf';
   interiorGroup.add(farmasiCounter);
   interactables.push(farmasiCounter);
 
   const farmasiTop = new THREE.Mesh(
-    new THREE.BoxGeometry(3.5, 0.12, 1.15),
+    new THREE.BoxGeometry(3.3, 0.12, 1.1),
     mats.woodDesk
   );
-  farmasiTop.position.set(12.0, 1.04, 2.6);
+  farmasiTop.position.set(12.4, 1.04, 2.0);
   interiorGroup.add(farmasiTop);
 
   const farmasiSign = new THREE.Mesh(
@@ -976,34 +1056,34 @@ export function createInteriorHospitalGroup(
       ),
     })
   );
-  farmasiSign.position.set(12.0, 0.52, 3.14);
+  farmasiSign.position.set(12.4, 0.52, 2.52);
   interiorGroup.add(farmasiSign);
 
   const pharmacist = createCharacterMesh(mats, { shirtColor: 0xfaf8f5 });
-  pharmacist.group.position.set(12.0, 0, 1.65);
+  pharmacist.group.position.set(12.4, 0, 1.05);
   interiorGroup.add(pharmacist.group);
 
-  // Kasir Counter (Right of Farmasi)
+  // Kasir Counter at (15.8, 2.5) facing patient at (15.8, 4.1)
   const kasirCounter = new THREE.Mesh(
-    new THREE.BoxGeometry(2.8, 1.0, 1.05),
+    new THREE.BoxGeometry(2.6, 1.0, 1.0),
     mats.creamWall
   );
-  kasirCounter.position.set(15.6, 0.5, 3.2);
+  kasirCounter.position.set(15.8, 0.5, 2.5);
   kasirCounter.castShadow = true;
   kasirCounter.userData.hotspotId = 'kasir-pos';
   interiorGroup.add(kasirCounter);
   interactables.push(kasirCounter);
 
-  const pinKasir = createHotspotPin(15.6, 2.15, 3.2, 'kasir-pos');
+  const pinKasir = createHotspotPin(15.8, 2.15, 2.5, 'kasir-pos');
   interiorGroup.add(pinKasir);
   interactables.push(pinKasir);
   hotspotPins.push(pinKasir);
 
   const kasirTop = new THREE.Mesh(
-    new THREE.BoxGeometry(2.9, 0.12, 1.15),
+    new THREE.BoxGeometry(2.7, 0.12, 1.1),
     mats.woodDesk
   );
-  kasirTop.position.set(15.6, 1.04, 3.2);
+  kasirTop.position.set(15.8, 1.04, 2.5);
   interiorGroup.add(kasirTop);
 
   const kasirSign = new THREE.Mesh(
@@ -1018,16 +1098,16 @@ export function createInteriorHospitalGroup(
       ),
     })
   );
-  kasirSign.position.set(15.6, 0.52, 3.74);
+  kasirSign.position.set(15.8, 0.52, 3.02);
   interiorGroup.add(kasirSign);
 
   const cashier = createCharacterMesh(mats, { shirtColor: 0x18181b });
-  cashier.group.position.set(15.6, 0, 2.25);
+  cashier.group.position.set(15.8, 0, 1.55);
   interiorGroup.add(cashier.group);
 
   // Indoor plant near Farmasi/Kasir
   const indoorPlant = createTreeMesh(mats, 0.65);
-  indoorPlant.position.set(9.4, 0, 5.8);
+  indoorPlant.position.set(8.6, 0, 5.6);
   interiorGroup.add(indoorPlant);
 
   // =========================================================
@@ -1129,18 +1209,32 @@ export function createInteriorHospitalGroup(
     shirtColor: 0xe8612c,
     pantsColor: 0x18181b,
   });
-  const startPt = patientPathCurve.getPointAt(0.14);
+  const startPt = patientPathCurve.getPointAt(stationU[1]);
   heroPatient.group.position.set(startPt.x, 0, startPt.z);
   interiorGroup.add(heroPatient.group);
 
+  // Held interactive item attached to heroPatient's right hand (E-Ticket Phone / Medicine Box)
+  const patientHeldItem = new THREE.Mesh(
+    new THREE.BoxGeometry(0.18, 0.24, 0.08),
+    new THREE.MeshStandardMaterial({
+      color: 0x10b981,
+      emissive: 0x10b981,
+      emissiveIntensity: 0.35,
+      roughness: 0.3,
+    })
+  );
+  patientHeldItem.position.set(0, -0.22, 0.14);
+  patientHeldItem.visible = false;
+  heroPatient.rightArm.add(patientHeldItem);
+
   // Subtle floor follow-ring around the walking patient
   const followRing = new THREE.Mesh(
-    new THREE.RingGeometry(0.42, 0.56, 28),
+    new THREE.RingGeometry(0.44, 0.6, 28),
     new THREE.MeshBasicMaterial({
       color: 0xe8612c,
       side: THREE.DoubleSide,
       transparent: true,
-      opacity: 0.55,
+      opacity: 0.65,
       depthWrite: false,
     })
   );
@@ -1151,17 +1245,21 @@ export function createInteriorHospitalGroup(
   return {
     interiorGroup,
     patientPathCurve,
+    stationU,
     heroPatient,
+    patientHeldItem,
     followRing,
     queueTvMesh,
     xrayScanBeam,
     interactables,
     hotspotPins,
     staffRigs: {
+      receptionist: receptionStaffList[1] || receptionStaffList[0],
       nurse,
       doctor: doctorChar,
       pharmacist,
       labTech,
+      cashier,
     },
     floor2Group,
     floor3Group,

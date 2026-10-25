@@ -70,8 +70,8 @@ export const TOUR_STEPS: TourStep[] = [
     titleOrange: 'Tanpa Antre.',
     description:
       'Ikuti perjalanan pasien di RS Nadi—dari pendaftaran sampai pulang, semuanya tertata dan bisa dipantau dari ponsel.',
-    cameraPos: [-16.0, 13.5, 22.0],
-    cameraTarget: [-2.2, 4.4, 0.0],
+    cameraPos: [-18.0, 14.8, 24.5],
+    cameraTarget: [-1.8, 3.6, 1.5],
     patientPathProgress: 0.0,
   },
   {
@@ -82,9 +82,9 @@ export const TOUR_STEPS: TourStep[] = [
     titleOrange: 'Pantau dari Ponsel.',
     description:
       'Nomor antrean bisa diambil online. Layar di lobi dan aplikasi menampilkan giliran yang sama, jadi Anda cukup datang saat dipanggil.',
-    cameraPos: [-8.5, 10.8, 11.2],
-    cameraTarget: [-5.8, 1.0, -2.2],
-    patientPathProgress: 0.14,
+    cameraPos: [-7.4, 7.2, 6.8],
+    cameraTarget: [-5.2, 1.1, -3.2],
+    patientPathProgress: 0.15,
   },
   {
     id: 2,
@@ -94,9 +94,9 @@ export const TOUR_STEPS: TourStep[] = [
     titleOrange: 'Ditangani Dokter.',
     description:
       'Perawat mencatat tanda-tanda vital—tensi, nadi, suhu, berat badan—lalu dokter spesialis memeriksa dengan data yang sudah lengkap.',
-    cameraPos: [-4.2, 11.2, 11.0],
-    cameraTarget: [0.2, 1.2, -2.5],
-    patientPathProgress: 0.38,
+    cameraPos: [-1.2, 7.4, 6.8],
+    cameraTarget: [1.8, 1.1, -2.6],
+    patientPathProgress: 0.42,
   },
   {
     id: 3,
@@ -106,9 +106,9 @@ export const TOUR_STEPS: TourStep[] = [
     titleOrange: 'Hasil Langsung Masuk.',
     description:
       'Pengambilan sampel dan rontgen dalam satu gedung. Hasilnya otomatis terkirim ke dokter dan aplikasi Anda.',
-    cameraPos: [2.4, 11.4, 10.8],
-    cameraTarget: [6.8, 1.2, -2.8],
-    patientPathProgress: 0.64,
+    cameraPos: [5.4, 7.5, 6.4],
+    cameraTarget: [8.8, 1.2, -4.2],
+    patientPathProgress: 0.70,
   },
   {
     id: 4,
@@ -118,9 +118,9 @@ export const TOUR_STEPS: TourStep[] = [
     titleOrange: 'Obat Siap Diambil.',
     description:
       'Resep dikirim langsung dari ruang dokter ke farmasi. Notifikasi masuk begitu obat siap, tanpa perlu menunggu di depan loket.',
-    cameraPos: [6.5, 10.5, 13.8],
-    cameraTarget: [10.6, 1.2, 2.2],
-    patientPathProgress: 0.85,
+    cameraPos: [8.8, 7.2, 11.2],
+    cameraTarget: [12.0, 1.1, 2.4],
+    patientPathProgress: 0.88,
   },
   {
     id: 5,
@@ -130,8 +130,8 @@ export const TOUR_STEPS: TourStep[] = [
     titleOrange: 'Langsung Pulang.',
     description:
       'Konsultasi, lab, dan obat dirangkum dalam satu tagihan. Bayar dengan QRIS, kartu, e-wallet, atau BPJS, lalu bukti masuk ke WhatsApp.',
-    cameraPos: [8.8, 10.2, 14.5],
-    cameraTarget: [12.8, 1.1, 3.2],
+    cameraPos: [12.2, 7.0, 11.8],
+    cameraTarget: [15.4, 1.1, 3.2],
     patientPathProgress: 1.0,
   },
 ];

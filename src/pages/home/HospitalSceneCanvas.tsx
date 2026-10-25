@@ -24,7 +24,7 @@ export interface HospitalSceneCanvasProps {
   activeFloor?: FloorId;
   isNightMode?: boolean;
   activeQueueCode?: string;
-  selectedHotspotId?: string | null;
+  selectedHotspotId?: boolean | string | null;
   onSelectHotspot?: (hotspotId: string | null) => void;
 }
 
@@ -38,6 +38,8 @@ const _currentLookAt = new THREE.Vector3(
 );
 const _patientPoint = new THREE.Vector3();
 const _patientTangent = new THREE.Vector3();
+const _extPatientPoint = new THREE.Vector3();
+const _extPatientTangent = new THREE.Vector3();
 const _ambPoint = new THREE.Vector3();
 const _ambTangent = new THREE.Vector3();
 const _pointerNdc = new THREE.Vector2();
@@ -49,6 +51,15 @@ const _nightGroundColor = new THREE.Color(0x182030);
 const _dayRimColor = new THREE.Color(0xfde6d2);
 const _nightRimColor = new THREE.Color(0x60a5fa);
 
+// Exact facing angles for the patient at each of the 5 interior stations
+const STATION_FACING_ANGLES: Record<number, number> = {
+  1: Math.PI, // Pendaftaran: faces Reception Desk (-Z)
+  2: -Math.PI * 0.72, // Poliklinik: faces Nurse Triage & Doctor (-X / -Z)
+  3: Math.PI, // Lab & Radiologi: faces Chest X-Ray & Lab (-Z)
+  4: Math.PI, // Farmasi: faces Farmasi Counter (-Z)
+  5: Math.PI, // Kasir: faces Kasir Counter (-Z)
+};
+
 function dampAngle(
   current: number,
   target: number,
@@ -58,6 +69,11 @@ function dampAngle(
   let diff = ((target - current + Math.PI) % (Math.PI * 2)) - Math.PI;
   if (diff < -Math.PI) diff += Math.PI * 2;
   return current + diff * (1 - Math.exp(-lambda * dt));
+}
+
+function smoothstep01(t: number): number {
+  const x = Math.max(0, Math.min(1, t));
+  return x * x * (3 - 2 * x);
 }
 
 export function HospitalSceneCanvas({
@@ -211,15 +227,23 @@ export function HospitalSceneCanvas({
     const mats = createHospitalMaterials(isSoftwareGl);
 
     // Build Exterior & Interior Cutaway Groups
-    const { exteriorGroup, ambulance, sirenBarMat, roadCurve } =
-      createExteriorHospitalGroup(mats, maxAnisotropy);
+    const {
+      exteriorGroup,
+      ambulance,
+      sirenBarMat,
+      roadCurve,
+      exteriorPatient,
+      entranceWalkCurve,
+    } = createExteriorHospitalGroup(mats, maxAnisotropy);
     exteriorGroup.position.set(2.0, 0, 0);
     scene.add(exteriorGroup);
 
     const {
       interiorGroup,
       patientPathCurve,
+      stationU,
       heroPatient,
+      patientHeldItem,
       followRing,
       queueTvMesh,
       xrayScanBeam,
@@ -232,6 +256,9 @@ export function HospitalSceneCanvas({
     interiorGroup.position.set(0, -18, 0);
     interiorGroup.visible = false;
     scene.add(interiorGroup);
+
+    const followRingMat = followRing.material as THREE.MeshBasicMaterial;
+    const heldItemMat = patientHeldItem.material as THREE.MeshStandardMaterial;
 
     queueTvRef.current = { mesh: queueTvMesh, maxAnisotropy };
 
@@ -307,7 +334,8 @@ export function HospitalSceneCanvas({
     container.addEventListener('pointerup', handlePointerUp);
 
     let smoothedStep = continuousStepRef.current;
-    let currentPatientT = 0.14;
+    let currentPatientT = stationU[0];
+    let currentExtPatientT = 0;
     let currentBankZ = 0;
     let currentFov = 34;
     let smoothNight = stateRef.current.isNightMode ? 1 : 0;
@@ -379,19 +407,19 @@ export function HospitalSceneCanvas({
       smoothedStep = THREE.MathUtils.damp(
         smoothedStep,
         targetContinuous,
-        isSoftwareGl ? 9.5 : 6.2,
+        isSoftwareGl ? 8.5 : 5.5,
         dt
       );
       const stepVelocity =
         (smoothedStep - prevSmoothedStep) / Math.max(dt, 0.001);
 
-      // 2. Compute continuous interpolated camera & path state
+      // 2. Compute continuous interpolated camera & stage state
       const interp = interpolateTourCameraState(smoothedStep);
 
       smoothInterior = THREE.MathUtils.damp(
         smoothInterior,
         interp.interiorFactor,
-        isSoftwareGl ? 10.0 : 6.5,
+        isSoftwareGl ? 9.5 : 6.0,
         dt
       );
 
@@ -415,7 +443,7 @@ export function HospitalSceneCanvas({
       interiorGroup.visible = smoothInterior > 0.03;
       interiorGroup.position.y = (1 - smoothInterior) * -10.5;
 
-      // 3. Exterior Ambulance continuous driving along road curve
+      // 3. Exterior Ambulance & Exterior Patient Walking into the Hospital Entrance!
       if (exteriorGroup.visible) {
         const ambT = 0.25 + ((elapsed * 0.055) % 0.65);
         roadCurve.getPointAt(ambT, _ambPoint);
@@ -426,25 +454,89 @@ export function HospitalSceneCanvas({
           _ambPoint.z
         );
         ambulance.rotation.y = -Math.atan2(_ambTangent.z, _ambTangent.x);
+
+        // Exterior Patient walks from front walkway into the main doors when moving from Gedung -> Pendaftaran
+        // Also has a gentle continuous walk-in cycle when viewing Step 0 so the user sees them walking!
+        const targetExtT =
+          smoothedStep > 0.02
+            ? interp.exteriorWalkProgress
+            : (elapsed * 0.22) % 0.88;
+        const prevExtT = currentExtPatientT;
+        currentExtPatientT =
+          smoothedStep > 0.02
+            ? THREE.MathUtils.damp(
+                currentExtPatientT,
+                targetExtT,
+                isSoftwareGl ? 9.0 : 6.0,
+                dt
+              )
+            : targetExtT;
+
+        const extClamped = Math.max(0.01, Math.min(0.99, currentExtPatientT));
+        entranceWalkCurve.getPointAt(extClamped, _extPatientPoint);
+        entranceWalkCurve.getTangentAt(extClamped, _extPatientTangent);
+
+        const extSpeed =
+          smoothedStep > 0.02
+            ? Math.min(
+                1,
+                (Math.abs(currentExtPatientT - prevExtT) /
+                  Math.max(dt, 0.001)) *
+                  4.5
+              )
+            : 0.85;
+        const extBob = Math.abs(Math.sin(elapsed * 9.5)) * 0.045 * extSpeed;
+        exteriorPatient.group.position.set(
+          _extPatientPoint.x,
+          0.04 + extBob,
+          _extPatientPoint.z
+        );
+        exteriorPatient.group.rotation.y = Math.atan2(
+          _extPatientTangent.x,
+          _extPatientTangent.z
+        );
+        const extSwing = Math.sin(elapsed * 9.5) * 0.55 * extSpeed;
+        exteriorPatient.leftLeg.rotation.x = extSwing;
+        exteriorPatient.rightLeg.rotation.x = -extSwing;
+        exteriorPatient.leftArm.rotation.x = -extSwing * 0.75;
+        exteriorPatient.rightArm.rotation.x = extSwing * 0.75;
       }
 
-      // 4. Advance Hero Patient smoothly along the orange floor path
+      // 4. Advance Interior Hero Patient along the collision-free corridor path using exact stationU!
+      const clampedStep = Math.max(
+        0,
+        Math.min(TOUR_STEPS.length - 1, smoothedStep)
+      );
+      const sIdx0 = Math.floor(clampedStep);
+      const sIdx1 = Math.min(TOUR_STEPS.length - 1, sIdx0 + 1);
+      const rawFrac = clampedStep - sIdx0;
+      const walkAlpha =
+        sIdx0 === 0
+          ? smoothstep01(rawFrac / 0.84)
+          : smoothstep01((rawFrac - 0.18) / 0.64);
+      const exactTargetU =
+        stationU[sIdx0] + (stationU[sIdx1] - stationU[sIdx0]) * walkAlpha;
+
       const prevPatientT = currentPatientT;
       currentPatientT = THREE.MathUtils.damp(
         currentPatientT,
-        interp.patientPathProgress,
-        isSoftwareGl ? 8.5 : 5.2,
+        exactTargetU,
+        isSoftwareGl ? 9.0 : 5.8,
         dt
       );
       const patientSpeed =
         Math.abs(currentPatientT - prevPatientT) / Math.max(dt, 0.001);
 
-      const clampedT = Math.max(0.02, Math.min(0.99, currentPatientT));
+      const clampedT = Math.max(0.005, Math.min(0.995, currentPatientT));
       patientPathCurve.getPointAt(clampedT, _patientPoint);
       patientPathCurve.getTangentAt(clampedT, _patientTangent);
 
-      // Subtle vertical walk bobbing
-      const walkStrength = Math.min(1, patientSpeed * 7.5);
+      const walkStrength = Math.min(1, patientSpeed * 6.5);
+      const isPerformingStationAction =
+        interp.activeStationStage !== null && walkStrength < 0.28;
+      const activeStage = interp.activeStationStage;
+
+      // Vertical walk bobbing while walking
       const walkBob = Math.abs(Math.sin(elapsed * 10.0)) * 0.045 * walkStrength;
       heroPatient.group.position.set(
         _patientPoint.x,
@@ -452,44 +544,123 @@ export function HospitalSceneCanvas({
         _patientPoint.z
       );
 
-      const desiredHeading = Math.atan2(_patientTangent.x, _patientTangent.z);
+      // Facing direction: while walking, face along the corridor path tangent;
+      // when stopped at a station (Stage 1..5), smoothly turn to face the station counter/staff!
+      const pathHeading = Math.atan2(_patientTangent.x, _patientTangent.z);
+      const stationHeading =
+        activeStage && STATION_FACING_ANGLES[activeStage] !== undefined
+          ? STATION_FACING_ANGLES[activeStage]
+          : pathHeading;
+      const desiredHeading = isPerformingStationAction
+        ? stationHeading
+        : pathHeading;
+
       heroPatient.group.rotation.y = dampAngle(
         heroPatient.group.rotation.y,
         desiredHeading,
-        10.0,
+        isSoftwareGl ? 11.0 : 8.5,
         dt
       );
 
-      // Limb walk cycle + subtle idle breathing
-      const swing =
-        Math.sin(elapsed * 10.0) * 0.52 * walkStrength +
-        Math.sin(elapsed * 2.2) * 0.03 * (1 - walkStrength);
-      heroPatient.leftLeg.rotation.x = swing;
-      heroPatient.rightLeg.rotation.x = -swing;
-      heroPatient.leftArm.rotation.x = -swing * 0.75;
-      heroPatient.rightArm.rotation.x = swing * 0.75;
+      // Reset default staff rotations before applying stage-specific interactions
+      staffRigs.receptionist.rightArm.rotation.x =
+        -0.2 + Math.sin(elapsed * 2.2) * 0.08;
+      staffRigs.nurse.rightArm.rotation.x =
+        -0.3 + Math.sin(elapsed * 2.5) * 0.1;
+      staffRigs.doctor.rightArm.rotation.x =
+        -0.25 + Math.cos(elapsed * 2.4) * 0.1;
+      staffRigs.labTech.rightArm.rotation.x =
+        -0.28 + Math.cos(elapsed * 3.1) * 0.12;
+      staffRigs.pharmacist.rightArm.rotation.x =
+        -0.25 + Math.sin(elapsed * 2.8) * 0.1;
+      staffRigs.cashier.rightArm.rotation.x =
+        -0.2 + Math.cos(elapsed * 2.6) * 0.08;
+
+      if (isPerformingStationAction && activeStage !== null) {
+        // Patient is stopped at Stage 1..5 -> perform distinct stage interaction!
+        heroPatient.leftLeg.rotation.x = 0;
+        heroPatient.rightLeg.rotation.x = 0;
+        followRingMat.color.setHex(0x10b981); // Emerald green ring indicates active stage interaction
+
+        if (activeStage === 1) {
+          // Stage 1 (Pendaftaran): Patient raises smartphone/QR E-Ticket to scan at reception desk;
+          // Receptionist reaches out to welcome & check them in
+          patientHeldItem.visible = true;
+          heldItemMat.color.setHex(0x10b981);
+          heroPatient.rightArm.rotation.x =
+            -1.15 + Math.sin(elapsed * 4.5) * 0.22;
+          heroPatient.leftArm.rotation.x = -0.25;
+          staffRigs.receptionist.rightArm.rotation.x =
+            -0.95 + Math.sin(elapsed * 4.5) * 0.2;
+        } else if (activeStage === 2) {
+          // Stage 2 (Poliklinik): Patient extends left arm toward Nurse for blood pressure / vitals check;
+          // Nurse reaches out with vitals cuff & Doctor waves/reviews chart
+          patientHeldItem.visible = false;
+          heroPatient.leftArm.rotation.x =
+            -1.05 + Math.sin(elapsed * 3.6) * 0.14;
+          heroPatient.rightArm.rotation.x =
+            -0.35 + Math.cos(elapsed * 3.6) * 0.12;
+          staffRigs.nurse.rightArm.rotation.x =
+            -1.0 + Math.sin(elapsed * 3.8) * 0.22;
+          staffRigs.doctor.rightArm.rotation.x =
+            -0.85 + Math.sin(elapsed * 3.2) * 0.2;
+        } else if (activeStage === 3) {
+          // Stage 3 (Lab & Radiologi): Patient holds chest X-ray posture while laser beam scans;
+          // Lab tech operates scanner console
+          patientHeldItem.visible = false;
+          heroPatient.leftArm.rotation.x =
+            -0.82 + Math.sin(elapsed * 3.0) * 0.12;
+          heroPatient.rightArm.rotation.x =
+            -0.82 + Math.sin(elapsed * 3.0) * 0.12;
+          staffRigs.labTech.rightArm.rotation.x =
+            -0.95 + Math.sin(elapsed * 4.2) * 0.22;
+        } else if (activeStage === 4) {
+          // Stage 4 (Farmasi): Pharmacist hands over prescription bag (#RX-2041) & patient receives it
+          patientHeldItem.visible = true;
+          heldItemMat.color.setHex(0xe8612c);
+          heroPatient.rightArm.rotation.x =
+            -1.05 + Math.sin(elapsed * 3.8) * 0.18;
+          heroPatient.leftArm.rotation.x =
+            -0.85 + Math.sin(elapsed * 3.8) * 0.18;
+          staffRigs.pharmacist.rightArm.rotation.x =
+            -1.05 - Math.sin(elapsed * 3.8) * 0.2;
+          staffRigs.pharmacist.leftArm.rotation.x = -0.75;
+        } else if (activeStage === 5) {
+          // Stage 5 (Kasir): Patient taps QRIS phone at cashier counter & waves goodbye
+          patientHeldItem.visible = true;
+          heldItemMat.color.setHex(0x10b981);
+          heroPatient.rightArm.rotation.x =
+            -1.1 + Math.sin(elapsed * 5.0) * 0.25;
+          heroPatient.leftArm.rotation.x =
+            -0.45 + Math.cos(elapsed * 4.0) * 0.18;
+          staffRigs.cashier.rightArm.rotation.x =
+            -0.95 + Math.sin(elapsed * 4.5) * 0.22;
+        }
+      } else {
+        // Patient is walking between stages along the open corridor
+        patientHeldItem.visible = false;
+        followRingMat.color.setHex(0xe8612c);
+        const swing =
+          Math.sin(elapsed * 10.0) * 0.55 * walkStrength +
+          Math.sin(elapsed * 2.2) * 0.04 * (1 - walkStrength);
+        heroPatient.leftLeg.rotation.x = swing;
+        heroPatient.rightLeg.rotation.x = -swing;
+        heroPatient.leftArm.rotation.x = -swing * 0.78;
+        heroPatient.rightArm.rotation.x = swing * 0.78;
+      }
 
       // Update floor follow-ring around patient
       followRing.position.set(_patientPoint.x, 0.035, _patientPoint.z);
-      const ringScale = 1 + Math.sin(elapsed * 4.0) * 0.08 + walkStrength * 0.15;
+      const ringScale =
+        1 +
+        Math.sin(elapsed * 4.5) * 0.1 +
+        (isPerformingStationAction ? 0.18 : walkStrength * 0.12);
       followRing.scale.set(ringScale, ringScale, 1);
 
-      // 4B. Room Micro-Animations (X-Ray Laser Sweep, Staff Working & Hotspot Beacons)
+      // 4B. Room Micro-Animations (X-Ray Laser Sweep & Hotspot Beacons)
       if (interiorGroup.visible) {
-        // Vertical X-ray scan beam sweep in Radiologi
         xrayScanBeam.position.y = 1.35 + Math.sin(elapsed * 2.8) * 0.52;
 
-        // Subtle nurse & pharmacist examination micro-motions
-        staffRigs.nurse.rightArm.rotation.x =
-          -0.35 + Math.sin(elapsed * 3.0) * 0.18;
-        staffRigs.doctor.rightArm.rotation.x =
-          -0.25 + Math.cos(elapsed * 2.4) * 0.12;
-        staffRigs.pharmacist.leftArm.rotation.x =
-          -0.3 + Math.sin(elapsed * 3.4) * 0.2;
-        staffRigs.labTech.rightArm.rotation.x =
-          -0.28 + Math.cos(elapsed * 3.1) * 0.16;
-
-        // Rotating & bobbing interactive 3D hotspot pins
         for (let i = 0; i < hotspotPins.length; i++) {
           const pin = hotspotPins[i];
           const baseY = (pin.userData.baseY as number) || 2.5;
@@ -503,7 +674,7 @@ export function HospitalSceneCanvas({
         }
       }
 
-      // 5. 3D Follow-Camera Computation (blends spline framing with live 3D patient tracking)
+      // 5. 3D Follow-Camera Computation (Far-to-Near Zoom & Live Patient Tracking)
       smoothPointerX = THREE.MathUtils.damp(
         smoothPointerX,
         pointerNormX,
@@ -517,18 +688,16 @@ export function HospitalSceneCanvas({
         dt
       );
 
-      // When followCamTight is enabled or during movement between interior rooms,
-      // blend camera target toward the walking heroPatient's live 3D position!
       const followWeight =
         smoothInterior *
         (stateRef.current.followCamTight
-          ? 0.58
-          : Math.min(0.42, 0.16 + walkStrength * 0.28));
+          ? 0.65
+          : Math.min(0.48, 0.22 + walkStrength * 0.26));
 
-      // Offset patient X slightly left (-2.0) so the patient & room stay framed on the right 60% of the screen
-      const patientLookX = _patientPoint.x - 2.0;
-      const patientLookY = 1.05 + smoothFloorElevation * 0.45;
-      const patientLookZ = _patientPoint.z;
+      // Offset patient X slightly left (-1.8) so the patient & room stay framed on the right 60% of the viewport
+      const patientLookX = _patientPoint.x - 1.8;
+      const patientLookY = 1.0 + smoothFloorElevation * 0.45;
+      const patientLookZ = _patientPoint.z - 0.6;
 
       const blendedTargetX = THREE.MathUtils.lerp(
         interp.cameraTarget[0],
@@ -548,32 +717,36 @@ export function HospitalSceneCanvas({
         followWeight
       );
 
-      // Follow camera position also tracks the patient's 3D offset smoothly
-      const patientChasePosX = _patientPoint.x - 4.2;
+      // Near close-up camera offset when at a station, pulling slightly higher during corridor walks
+      const patientChasePosX = _patientPoint.x - 3.4;
       const patientChasePosY =
-        (stateRef.current.followCamTight ? 8.6 : 10.4) + smoothFloorElevation;
+        (stateRef.current.followCamTight ? 6.2 : 7.2) +
+        walkStrength * 1.4 +
+        smoothFloorElevation;
       const patientChasePosZ =
-        _patientPoint.z + (stateRef.current.followCamTight ? 9.8 : 11.8);
+        _patientPoint.z +
+        (stateRef.current.followCamTight ? 6.8 : 7.8) +
+        walkStrength * 1.8;
 
       const blendedCamX =
         THREE.MathUtils.lerp(
           interp.cameraPos[0],
           patientChasePosX,
-          followWeight * 0.75
+          followWeight * 0.8
         ) +
-        smoothPointerX * 0.65;
+        smoothPointerX * 0.55;
       const blendedCamY =
         THREE.MathUtils.lerp(
           interp.cameraPos[1] + smoothFloorElevation,
           patientChasePosY,
-          followWeight * 0.75
+          followWeight * 0.8
         ) -
-        smoothPointerY * 0.35 +
-        Math.sin(elapsed * 1.4) * 0.06;
+        smoothPointerY * 0.3 +
+        Math.sin(elapsed * 1.4) * 0.05;
       const blendedCamZ = THREE.MathUtils.lerp(
         interp.cameraPos[2],
         patientChasePosZ,
-        followWeight * 0.75
+        followWeight * 0.8
       );
 
       _targetCamPos.set(blendedCamX, blendedCamY, blendedCamZ);
@@ -620,7 +793,7 @@ export function HospitalSceneCanvas({
 
       camera.lookAt(_currentLookAt);
 
-      // Subtle 3D flight bank roll (camera.rotation.z) and dynamic FOV kick during flight
+      // Subtle 3D flight bank roll and dynamic FOV kick during flight
       const targetBankZ = THREE.MathUtils.clamp(
         -stepVelocity * 0.018 - smoothPointerX * 0.012,
         -0.045,
