@@ -1,0 +1,6 @@
+{
+  "name": "Nadi — Rumah Sakit Digital & Visualisasi 3D Interaktif",
+  "description": "Pengalaman web rumah sakit modern dengan tur 3D interaktif Three.js dari pendaftaran, poliklinik, laboratorium, farmasi, hingga kasir dan pembuatan janji dokter tanpa antre.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
